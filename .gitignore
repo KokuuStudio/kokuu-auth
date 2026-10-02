@@ -1,0 +1,67 @@
+.env
+.sass-cache
+coverage
+.idea/
+.cache/
+.cache-loader/
+vendor/*
+storage/textures
+storage/textures/*
+storage/update_cache/*
+node_modules/*
+target/
+yarn-error.log
+_ide_helper.php
+.phpstorm.meta.php
+.uini
+junit.xml
+storage/*.db
+storage/*.sqlite
+storage/insane-profile-cache
+storage/oauth-public.key
+storage/oauth-private.key
+storage/install.lock
+storage/options.php
+.phpunit.result.cache
+.php-cs-fixer.cache
+resources/views/overrides
+.DS_Store
+*/.DS_Store
+
+# ---- KokuuSkin 定制补充 ----
+# 依赖锁文件（含平台特定内容，不适合分发）
+composer.lock
+package-lock.json
+
+# SQLite 变体文件
+*.sqlite-shm
+*.sqlite-wal
+database/*.sqlite
+database/*.sqlite-shm
+database/*.sqlite-wal
+
+# 日志与调试
+storage/logs/*.log
+storage/debugbar/
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/framework/testing/
+
+# 插件用户数据（增删的台词等，不应随代码分发）
+storage/plugins/
+
+# 上传的纹理
+public/textures/
+
+# 插件运行时发布的资源（由 core CopyPluginAssets 在启用插件时自动生成）
+public/plugins/
+
+# 本地诊断脚本
+diagnose/
+*.log
+
+# vscode
+.vscode/
+Thumbs.db
+*.swp

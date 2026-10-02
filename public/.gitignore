@@ -1,0 +1,9 @@
+# 本文件由 KokuuSkin 定制版覆盖。
+#
+# 上游忽略 app/（前端构建产物，需自行 npm install && npm run build）。
+# 定制版选择**随仓库分发构建产物**，这样 clone 后只需 composer install
+# 即可运行，省去 Node 环境与构建步骤。
+#
+# 何时需要自行构建：升级内核前端源码（resources/assets/）之后。
+app/
+!app/
