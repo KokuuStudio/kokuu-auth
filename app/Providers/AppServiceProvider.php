@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Services;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -22,6 +23,37 @@ class AppServiceProvider extends ServiceProvider
         Paginator::useBootstrap();
 
         $this->configureUrlGenerator($request);
+        $this->tuneSqlite();
+    }
+
+    /**
+     * KokuuSkin 定制：SQLite 性能调优
+     *
+     * 低配服务器常用 SQLite，这三个 PRAGMA 对读多写少的皮肤站收益明显：
+     *   - journal_mode=WAL      读写不互相阻塞（默认 rollback journal 会锁库）
+     *   - synchronous=NORMAL   牺牲少量持久性，换取显著的写入速度
+     *   - cache_size=-32000    32MB 页缓存（默认仅 2MB）
+     *
+     * 仅对 sqlite 驱动生效，其它数据库直接跳过。
+     * PRAGMA 放在 boot 中执行一次，连接复用期间持续有效。
+     *
+     * @codeCoverageIgnore
+     */
+    protected function tuneSqlite(): void
+    {
+        try {
+            $connection = DB::connection();
+            if ($connection->getDriverName() !== 'sqlite') {
+                return;
+            }
+
+            $connection->statement('PRAGMA journal_mode=WAL;');
+            $connection->statement('PRAGMA synchronous=NORMAL;');
+            $connection->statement('PRAGMA cache_size=-32000;');
+        } catch (\Throwable $e) {
+            // 调优失败不应影响站点可用性（如数据库只读、权限不足）
+            logger('[KokuuSkin] SQLite 调优跳过：' . $e->getMessage());
+        }
     }
 
     /**

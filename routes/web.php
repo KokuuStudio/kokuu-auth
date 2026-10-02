@@ -179,8 +179,14 @@ Route::prefix('admin')
         Route::prefix('plugins')->name('plugins.')->group(function () {
             Route::get('data', 'PluginController@getPluginData')->name('data');
 
+            // KokuuSkin 定制：修复上游的重复路由名
+            // 上游把 GET view 与 POST manage 都命名为 'view'，
+            // 导致 `php artisan route:cache` 抛
+            // "Another route has already been assigned name [plugins.view]"，
+            // 使路由缓存**完全无法启用**（生产环境白白损失性能）。
+            // 改为 'view' / 'manage' 两个唯一名；无代码引用旧名，改名安全。
             Route::view('manage', 'admin.plugins')->name('view');
-            Route::post('manage', 'PluginController@manage')->name('view');
+            Route::post('manage', 'PluginController@manage')->name('manage');
             Route::any('config/{name}', 'PluginController@config')->name('config');
             Route::get('readme/{name}', 'PluginController@readme')->name('readme');
             Route::middleware('role:super-admin')->group(function () {
