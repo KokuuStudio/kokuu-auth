@@ -1,0 +1,509 @@
+/* =========================================================
+   KokuuCredit 仪表盘 —— 积分 + 社区互联
+
+   设计取向：Apple 扁平化（大圆角、细腻阴影、极淡分隔线）。
+   配色直接复用 kokuu-ui/apple.css 的 CSS 变量，
+   所以本文件**不定义** --a-* 变量，只消费。
+
+   ⚠️ 作用域说明（踩过的坑，务必保留）：
+     apple.css 的规则挂在 `body.kokuu-apple.*` 下，
+     而 `kokuu-apple` 是 kokuu-ui 的 rebuild.js **在运行时**加上去的类，
+     curl 抓下来的 HTML 里**没有**这个类。
+     → 所以本文件绝不能依赖 `body.kokuu-apple` 前缀做作用域，
+       否则离线渲染 / JS 未跑完时会整块失效。
+     → 一律用 `.kcDash` 这类自有类名做作用域，天然隔离。
+
+   ⚠️⚠️ 但**不能只用自己的类名**——必须写成 `body .kcDash-col X`：
+     apple.css:503 有一条
+       body.kokuu-apple a { color: var(--k-rain); }
+     特异性 (0,1,2)，比任何单类名选择器 (0,1,0) 都高，
+     会把本文件里所有 <a> 的 color 吃掉。实测后果：
+       · 底部「前往论坛」CTA 白字被改成 --k-rain，
+         而背景也是 --k-rain → **整颗按钮变成一块纯青色，看不见任何文字**
+       · 「流水」入口和论坛地址的 --k-lilac 紫也一起失效
+     同理 `body.kokuu-apple a:hover { color: var(--k-ink) }` 是 (0,1,3)。
+     → 所以本文件里**每一条给 <a> 设color 的规则**都以
+       `body .kcDash-col` 开头（(0,2,2) / hover (0,2,3)），稳定压过它。
+       别图省事写回单类名。
+   ========================================================= */
+
+/* ---- 列容器 ---- */
+/*
+ * 一列 = 一个 widget 槽位。grid.twig 的结构是
+ *   row -> col -> widget，所以每个 widget 自己包一个 .kcDash-col，
+ *   列内多张卡用 flex 纵向排。
+ *
+ * ⚠️ 早先这里叫 .kcDash 且是 `flex-direction: column`，
+ *   挂在**外层**时会把两列 widget 一起裹进去、强制纵向 ——
+ *   表现为「明明layout 给了 md-7/md-5 两栏，页面却全纵向排开」。
+ *   作用域必须精确到列，不能跨列。
+ */
+.kcDash-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Bootstrap 的 .col-* 本身是 float/flex item，
+     内部再 flex 竖排时需要明确 min-width:0 防长内容撑破 */
+  min-width: 0;
+}
+
+/* ---- 卡片外框 ---- */
+.kcDash-card {
+  background: var(--a-surface, #fff);
+  border-radius: var(--a-radius-lg, 24px);
+  box-shadow: var(--a-shadow, 0 1px 2px rgba(0, 0, 0, .04), 0 6px 20px rgba(0, 0, 0, .05));
+  border: 0.5px solid var(--a-sep, rgba(60, 60, 67, .13));
+  padding: 22px 24px;
+  transition: box-shadow .3s var(--a-ease, cubic-bezier(.4, 0, .2, 1)),
+              transform .3s var(--a-ease, cubic-bezier(.4, 0, .2, 1));
+}
+
+.kcDash-card:hover {
+  box-shadow: var(--a-shadow-hover, 0 2px 6px rgba(0, 0, 0, .06), 0 12px 32px rgba(0, 0, 0, .1));
+}
+
+/* ---- 卡头 ---- */
+.kcDash-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.kcDash-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--a-text, #1C1C1E);
+  letter-spacing: .01em;
+}
+
+.kcDash-eyebrow i {
+  font-size: 12px;
+  color: var(--a-text-secondary, #6E6E73);
+}
+
+/* ⚠️ 作用域前缀body 的原因见文件头：压过 apple.css 的 body.kokuu-apple a */
+body .kcDash-col .kcDash-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--k-lilac, #8B7FD4);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: opacity .2s var(--a-ease, cubic-bezier(.4, 0, .2, 1));
+}
+
+body .kcDash-col .kcDash-link:hover { opacity: .68; }
+body .kcDash-col .kcDash-link i { font-size: 10px; }
+
+/* ---- 余额主视觉 ---- */
+.kcDash-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.kcDash-balance-num {
+  font-size: 46px;
+  line-height: 1.05;
+  font-weight: 500;
+  letter-spacing: -.02em;
+  /* 大数字用等宽数字，避免跳动时左右抖动 */
+  font-variant-numeric: tabular-nums;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcDash-balance-unit {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--a-text-secondary, #6E6E73);
+}
+
+.kcDash-sub {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--a-text-secondary, #6E6E73);
+  margin: 0 0 18px;
+}
+
+/* ---- 今日数据 ---- */
+.kcDash-metrics {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.kcDash-metric {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-bg, #F2F2F7);
+}
+
+.kcDash-metric-num {
+  display: block;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcDash-metric-label {
+  display: block;
+  font-size: 12px;
+  color: var(--a-text-secondary, #6E6E73);
+  margin-top: 2px;
+}
+
+/* ---- 签到条---- */
+.kcDash-sign {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--a-radius-sm, 12px);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.kcDash-sign.is-todo {
+  background: rgba(251, 174, 52, .12);
+  color: #8A5A00;
+}
+
+.kcDash-sign.is-done {
+  background: rgba(52, 199, 89, .12);
+  color: #1B7A38;
+}
+
+.kcDash-sign-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.kcDash-sign-icon i {
+  font-size: 10px;
+  color: #fff;
+}
+
+/* ---- 最近变动列表 ---- */
+.kcDash-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kcDash-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  /* 用行间分隔线而不是外框，Apple 风格更轻 */
+  border-bottom: 0.5px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcDash-row:last-child { border-bottom: 0; }
+
+.kcDash-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kcDash-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcDash-row-time {
+  font-size: 12px;
+  color: var(--a-text-secondary, #6E6E73);
+  font-variant-numeric: tabular-nums;
+}
+
+.kcDash-row-delta {
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.kcDash-row-delta.is-plus { color: #248A3D; }
+.kcDash-row-delta.is-minus { color: #D70015; }
+.kcDash-row-delta.is-zero { color: var(--a-text-secondary, #6E6E73); }
+
+.kcDash-empty {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--a-text-secondary, #6E6E73);
+  margin: 0;
+  padding: 6px 0;
+}
+
+/* ---- 互联卡 ---- */
+/*
+ * 右列只有一张卡，左列有两张（积分 + 最近变动），
+ * 所以右列天然比左列矮一截，底部会缺一块。
+ * flex:1 让它吃掉列内剩余高度，两列底边对齐。
+ * 移动端（<992px）两个 widget 各自100% 宽、各自成列，
+ * 高度本来就由内容决定，flex:1 不会产生空洞，无需额外处理。
+ */
+.kcDash-card--interop {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 让 CTA 始终贴在卡片底部，而不是跟着内容浮在中间 */
+.kcDash-card--interop .kcDash-cta { margin-top: auto; }
+
+.kcDash-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.kcDash-pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.kcDash-pill.is-on {
+  background: rgba(52, 199, 89, .12);
+  color: #1B7A38;
+}
+
+.kcDash-pill.is-off {
+  background: rgba(142, 142, 147, .14);
+  color: #6E6E73;
+}
+
+.kcDash-lede {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--a-text-secondary, #6E6E73);
+  margin: 0 0 18px;
+}
+
+.kcDash-facts {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+}
+
+.kcDash-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 0.5px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcDash-fact:last-child { border-bottom: 0; }
+
+.kcDash-fact-label {
+  font-size: 13px;
+  color: var(--a-text-secondary, #6E6E73);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.kcDash-fact-value {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--a-text, #1C1C1E);
+  text-align: right;
+  min-width: 0;
+  /* 长邮箱/URL 要能换行，不能撑破卡片 */
+  word-break: break-word;
+}
+
+body .kcDash-col a.kcDash-fact-value {
+  color: var(--k-lilac, #8B7FD4);
+  text-decoration: none;
+  transition: opacity .2s var(--a-ease, cubic-bezier(.4, 0, .2, 1));
+}
+
+body .kcDash-col a.kcDash-fact-value:hover { opacity: .68; }
+body .kcDash-col a.kcDash-fact-value i { font-size: 10px; margin-left: 3px; }
+
+/* ---- 加分规则 ---- */
+.kcDash-rules {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.kcDash-rule {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-bg, #F2F2F7);
+  text-align: center;
+}
+
+.kcDash-rule-num {
+  display: block;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--k-rain, #0FA3A3);
+  font-variant-numeric: tabular-nums;
+}
+
+.kcDash-rule-label {
+  display: block;
+  font-size: 12px;
+  color: var(--a-text-secondary, #6E6E73);
+  margin-top: 2px;
+}
+
+/* ---- 底部按钮 ---- */
+body .kcDash-col .kcDash-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 12px 20px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--k-rain, #0FA3A3);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: filter .2s var(--a-ease, cubic-bezier(.4, 0, .2, 1)),
+              transform .2s var(--a-ease, cubic-bezier(.4, 0, .2, 1));
+}
+
+body .kcDash-col .kcDash-cta:hover {
+  filter: brightness(1.06);
+  color: #fff;
+  text-decoration: none;
+}
+
+body .kcDash-col .kcDash-cta:active { transform: scale(.985); }
+
+/* =========================================================
+   响应式
+   ========================================================= */
+
+/* 中屏：两栏挤压时先减padding，视觉密度更均衡 */
+@media (max-width: 1199.98px) {
+  .kcDash-card { padding: 20px 20px; }
+  .kcDash-balance-num { font-size: 40px; }
+}
+
+/*
+ * 移动端：AdminLTE 的 .col-md-* 在 <992px 时变 100% 宽，
+ * 两个容器自然上下堆叠。这里只调内部密度。
+ *
+ * ⚠️ 不要碰.main-sidebar 的 width/max-width ——
+ *   AdminLTE sidebar-mini 在移动端靠 margin-left: -250px 折叠，
+ *   改宽度会多出一条贴在左边的空白宽栏。
+ */
+@media (max-width: 991.98px) {
+  .kcDash-col { gap: 14px; }
+  .kcDash-card { padding: 18px 18px; border-radius: var(--a-radius, 18px); }
+  .kcDash-balance-num { font-size: 38px; }
+  .kcDash-head { margin-bottom: 16px; }
+}
+
+/* 窄屏（SE / 小屏安卓）：两栏数据块改单栏，避免数字被挤到换行 */
+@media (max-width: 575.98px) {
+  .kcDash-card { padding: 16px 16px; }
+
+  .kcDash-balance-num { font-size: 34px; }
+  .kcDash-balance-unit { font-size: 14px; }
+
+  .kcDash-metrics,
+  .kcDash-rules {
+    gap: 10px;
+  }
+
+  .kcDash-metric,
+  .kcDash-rule { padding: 10px 12px; }
+  .kcDash-metric-num { font-size: 18px; }
+  .kcDash-rule-num { font-size: 16px; }
+
+  /* 明细改为上下堆叠，标签在上值在下，长邮箱独占一行 */
+  .kcDash-fact {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .kcDash-fact-value { text-align: left; }
+
+  .kcDash-row-time { font-size: 11px; }
+}
+
+/* 超窄屏（iPhone SE 1代/ 320px 宽） */
+@media (max-width: 359.98px) {
+  .kcDash-card { padding: 14px 14px; border-radius: 14px; }
+  .kcDash-balance-num { font-size: 30px; }
+  .kcDash-eyebrow { font-size: 12px; }
+  .kcDash-sub { font-size: 12px; }
+}
+
+/* ---- 深色模式（苹果深色）---- */
+body.dark-mode .kcDash-card {
+  background: var(--a-surface, #1C1C1E);
+  border-color: var(--a-sep, rgba(84, 84, 88, .5));
+}
+
+body.dark-mode .kcDash-metric,
+body.dark-mode .kcDash-rule {
+  background: rgba(118, 118, 128, .16);
+}
+
+body.dark-mode .kcDash-sign.is-todo {
+  background: rgba(255, 159, 10, .16);
+  color: #FFB340;
+}
+
+body.dark-mode .kcDash-sign.is-done {
+  background: rgba(48, 209, 88, .16);
+  color: #65D97A;
+}
+
+body.dark-mode .kcDash-row-delta.is-plus { color: #65D97A; }
+body.dark-mode .kcDash-row-delta.is-minus { color: #FF6961; }
+
+/* 无障碍：尊重系统的「减少动效」 */
+@media (prefers-reduced-motion: reduce) {
+  .kcDash-card,
+  body .kcDash-col .kcDash-link,
+  body .kcDash-col .kcDash-cta {
+    transition: none;
+  }
+  body .kcDash-col .kcDash-cta:active { transform: none; }
+}

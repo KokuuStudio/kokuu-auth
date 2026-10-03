@@ -5,6 +5,8 @@ Blessing Skin（皮肤站）侧的**唯一积分账本**，同时是两站账号
 - 论坛发帖/回复产生的加分事件，通过 HMAC 签名接口写入本插件，落`users.score` 并留`credit_ledger` 流水
 - 论坛只发不扣（扣分场景如建角色/衣柜/兑换仍走内核原有逻辑）
 - 账号互通：论坛作为 OAuth2 客户端，本插件基于内核自带的 Passport 提供授权码 + PKCE 流程
+- 后台仪表盘接管：只保留「积分（含签到）」与「社区互联」两个 Apple 扁平化容器，
+  适配桌面 / 移动 / 深色模式
 
 ![Blessing Skin](https://img.shields.io/badge/Blessing%20Skin-6.0-0FA3A3?style=flat-square)
 ![PHP](https://img.shields.io/badge/PHP-%3E%3D8.1-8B7FD4?style=flat-square)
@@ -158,6 +160,59 @@ access_token 本身是 **JWT（RS256，约 995 字符 3 段）** 而非随机串
 
 ---
 
+## 三、后台仪表盘
+
+本插件**接管**皮肤站后台的「仪表盘」页（`/admin`），
+把老皮肤站时代的四个高饱和色块换成两个 Apple 扁平化容器。
+
+### 为什么不留「角色数量」和「存储空间」
+
+这个站现在**只做账号验证 + 积分**，不再托管皮肤。
+`sum.players`（角色数量）和 `sum.storage`（存储空间）
+依赖的是 `players` 表和纹理托管，跟当前用途完全无关，
+留着就永远是两块死数据。原 grid 是：
+
+```
+layout:  [[md-6, md-6]]
+widgets: [[[usage, notification], [chart]]]
+```
+
+`usage` 里就含角色数量和存储空间。现在整个替换为：
+
+```
+layout:  [[md-7, md-5]]
+widgets: [[[dashboard.credit], [dashboard.interop]]]
+```
+
+### 两个容器
+
+| 容器 | 文件 | 内容 |
+|---|---|---|
+| 积分 | `views/dashboard/credit.twig` | 余额主卡（46px 大数字 + 今日获得/今日笔数 + 签到状态）+ 最近 4 笔变动 |
+| 社区互联 | `views/dashboard/interop.twig` | 互通状态 pill、论坛地址、当前账号、加分规则、前往论坛 CTA |
+
+数据由 `kokuu_credit_dashboard_data()` 一次算好，
+在 grid 钩子里 `View::share('kcDash', ...)` 挂上，两个 widget 各自读，
+**不会重复查库**。
+
+签到状态读 `users.last_sign_at`（datetime）。
+⚠️ 别和 `last_seen_at`（int 时间戳，最后一次访问）搞混，两者语义不同。
+
+### 样式
+
+`assets/dash.css`（约 500 行）**只消费** `kokuu-ui/apple.css` 的 CSS 变量
+（`--a-*` / `--k-*`），自己不 redefining，深色模式靠 `body.dark-mode` 覆盖。
+作用域一律用 `body .kcDash-col` 开头，原因见坑 10。
+
+断点：`1199.98` / `991.98`（AdminLTE 在此以下把 `col-md-*` 变100% 宽，
+两容器自然堆叠）/ `575.98`（明细改上下堆叠）/ `359.98`（超窄屏）。
+⚠️ **不要动 `.main-sidebar` 的 width**——AdminLTE `sidebar-mini`
+在移动端靠 `margin-left: -250px` 折叠，改宽度会多出一条空白宽栏。
+
+已验证：1440px 两栏（647+462）、390px 堆叠、320px 无溢出、深色模式正常。
+
+---
+
 ## 踩过的坑
 
 ### 1. `Hook::addRoute` 里的闭包要`use ($plugin)`
@@ -203,11 +258,136 @@ payload 字段名必须严格是 `expire_time` 而不是 `expires_at`。
 |---|---|
 | `users` | `uid`(主键) `email` `nickname` `score` `password` `verified` `permission` `register_at` `last_sign_at` |
 | `credit_ledger` | `id` `event_id` `uid` `delta` `balance_after` `source` `ref` `note` `created_at` |
-| `kokuu_sso_links` | `id` `skin_uid` `forum_user_id` `last_email` `last_ip` `created_at` `updated_at` |
+| `kokuu_sso_links` | `id` `uid` `last_email` `last_ip` `created_at` `updated_at` |
 
 ⚠️ 表名是 `credit_ledger` **没有 `kokuu_` 前缀**。
 ⚠️ 没有 `last_login_at` 列，只有 `last_sign_at`。
 ⚠️ `credit_ledger` **没有 `reason` 列**，来源是 `source`。
+⚠️ `users` **没有 `username` 列**，昵称字段是 `nickname`。
+⚠️ `kokuu_sso_links` **没有 `skin_uid` 也没有 `forum_user_id`**，
+   关联列就叫 `uid`；跨站映射靠 `last_email` 在论坛侧按邮箱对齐。
+   没有 `last_used_at`，最近使用时间读 `updated_at`。
+
+> 这次为了清测试残留，我照着记忆写了 `$r->forum_user_id`，
+> 直接 `Undefined property: stdClass::$forum_user_id`。
+> **这张表一共 6 列，写之前先 `DESCRIBE` 一次。**
+
+### 7. 接管后台仪表盘：`Filter` 的注册与执行
+
+`AdminController::index()` 里写的是
+
+```php
+$grid = $filter->apply('grid:admin.index', $grid);
+```
+
+所以插件可以**完全接管仪表盘布局**，core 一个字都不用改，
+卸载插件后自动恢复原样。注册用 `add()`，**不是** `apply()`：
+
+```php
+app(\Blessing\Filter::class)->add('grid:admin.index', function ($grid) {
+    return ['layout' => [...], 'widgets' => [...]];
+});
+```
+
+- 取实例必须 `app(\Blessing\Filter::class)`。
+  ⚠️ **没有 `app('filter')` 这个字符串绑定**，会抛
+  `Target class [filter] does not exist`。
+- ⚠️ 这个异常发生在 bootstrap 阶段，而
+  `PluginManager::loadBootstrapper()` 有 `try/catch` + `report($th)`，
+  **生产环境不重抛** —— 表现是「插件看着启用了，仪表盘毫无变化」，
+  **不报错，只是静默失效**。
+- 回调签名只有 `function ($grid)` 一个参数
+  （`AdminController` 没传 `$args`，多写参数不会被调用）。
+
+返回结构是**三层嵌套**，`shared/grid.twig` 按
+`grid.widgets[行][列][widget]` 取：
+
+```php
+'layout'  => [['md-7', 'md-5']],          // 与 widgets 的行数一致
+'widgets' => [[['ns::dashboard.credit'], ['ns::dashboard.interop']]],
+//                     ↑ 行0列0↑widget      ↑ 行0列1 ↑widget
+```
+
+⚠️ `layout` 的列数必须和 `widgets` 里那行的列数**完全一致**，否则渲染错位。
+
+### 8. 视图命名空间是 manifest 的 `namespace` 原值（反斜杠）
+
+```php
+'KokuuStudio\\KokuuCredit::dashboard.credit'   // ✅
+'kokuu-credit::dashboard.credit'              // ❌ 500
+```
+
+`PluginManager` 做的是 `$view->addNamespace($plugin->namespace, ...)`，
+而 `$plugin->namespace` 就是 manifest 里 `KokuuStudio\KokuuCredit` 的原值。
+写短名的报错只有一句
+`Template "kokuu-credit::dashboard.credit" is not defined in "shared.grid"`，
+**不会提示正确名字**。确认办法：
+
+```php
+$app->make('view')->getFinder()->getHints();
+```
+
+### 9. Twig 沙箱不放行自定义函数
+
+内核只注册了 `auth_user` / `auth_check` / `auth_guest` / `auth_guard` /
+`url` / `trans`。**没有 `auth()`**（`auth()->user()` 报
+`Unknown "auth" function`），自定义的 `kokuu_credit_dashboard_data()`
+同理会被拒。
+
+数据一律用 `View::share()` 传进视图：
+
+```php
+View::share('kcDash', kokuu_credit_dashboard_data(auth()->user()));
+```
+
+在 grid 钩子里 share 是安全的：`AdminController` 先 `apply()` 再渲染，
+此刻视图还没开始输出。
+
+### 10. 给 `<a>` 设 color 必须写成 `body .kcDash-col X`
+
+全站有两条全局规则会吃掉插件里单类名选择器的颜色：
+
+```css
+/* AdminLTE 主题 */
+a { color: var(--rain); }
+/* kokuu-ui/apple.css:503 */
+body.kokuu-apple a { color: var(--k-rain); }
+```
+
+`body.kokuu-apple a` 特异性 (0,1,2) 高于 `.kcDash-cta` (0,1,0)。
+实测后果：底部 CTA 白字被改成 `--k-rain`，而背景也是 `--k-rain`
+→ **整颗按钮变成一块纯青色，一个字都看不见**。
+
+所以 `dash.css` 里每一条给 `<a>` 设颜色的规则都写成
+`body .kcDash-col .kcDash-cta`（(0,2,2)），稳稳压过。
+
+⚠️ 排查这个问题时**先确认浏览器拿到的是新文件**——
+Edge 会在 `user-data-dir` 里缓存 CSS，`.debug/cdp-profile-*` 不清就会
+一直读到旧值，让人以为改了没用。验证脚本里加：
+
+```js
+await send('Network.enable');
+await send('Network.setCacheDisabled', { cacheDisabled: true });
+```
+
+### 11. `artisan view:clear` 不清 Twig 编译缓存
+
+Twig 的编译产物在 `storage/framework/views/twig/`（按 hash 分 256 个子目录），
+`view:clear` **不碰这个目录**。改了 twig 模板没生效时手动清：
+
+```bash
+rm -rf storage/framework/views/twig
+mkdir -p storage/framework/views/twig
+chown -R www-data:www-data storage/framework/views
+```
+
+### 12. 深色模式的开关是 `#toggle-dark-mode > a`
+
+`shared/dark-mode.twig` 渲染的是 `<li id="toggle-dark-mode"><a class="nav-link">`，
+**没有 `href`**，靠 `kokuu-ui/rebuild.js` 事件接管。
+自动化测试里别去点 `.dark-mode-toggle` / `[data-theme="dark"]`——
+那些选择器在这个站根本不存在，点了没反应还会误判成「深色模式坏了」。
+点完要读 `document.body.className` 确认 `dark-mode` 真的加上了。
 
 ---
 
@@ -221,7 +401,9 @@ cd /var/www/kokuu-auth
 sudo -u www-data php artisan view:clear
 sudo -u www-data php artisan route:clear
 sudo -u www-data php artisan cache:clear
+rm -rf storage/framework/views/twig          # 见坑 11
 systemctl reload php8.1-fpm
+/usr/local/bin/kokuu-sync-assets kokuu-credit# 静态资源有 public/ 和 plugins/ 两份
 ```
 
 ⚠️ `artisan` 必须用**FPM 的运行用户**（本机是 `www-data`）。

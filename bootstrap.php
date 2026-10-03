@@ -268,6 +268,126 @@ if (! function_exists('kokuu_credit_stats')) {
     }
 }
 
+if (! function_exists('kokuu_credit_sign_status')) {
+    /**
+     * 签到状态。
+     *
+     * ⚠️ 字段是 `users.last_sign_at`（datetime，**不是**时间戳）——
+     *   Blessing Skin 里另有 `last_seen_at`（int时间戳），
+     *   两者语义不同：前者=最后一次签到，后者=最后一次访问。
+     *   早期代码注释里写过「Blessing Skin 没有 last_sign_at」是错的，
+     *   实际表结构里一直都有，别被那句注释带偏。
+     *
+     * 判定「今天签过了」必须用日期比较而不是时间戳大小：
+     * 数据库里存的是 datetime 字符串，转时间戳会踩时区。
+     */
+    function kokuu_credit_sign_status(?string $lastSignAt): array
+    {
+        if (empty($lastSignAt)) {
+            return ['signed' => false, 'at' => null, 'text' => '尚未签到'];
+        }
+
+        try {
+            $at = \Carbon\Carbon::parse($lastSignAt);
+        } catch (\Throwable $e) {
+            // 脏数据不该让整个仪表盘 500
+            return ['signed' => false, 'at' => null, 'text' => '尚未签到'];
+        }
+
+        $signedToday = $at->isSameDay(\Carbon\Carbon::today());
+
+        return [
+            'signed' => $signedToday,
+            'at'     => $at,
+            'text'   => $signedToday
+                ? '今日已签到 · ' . $at->format('H:i')
+                : '上次签到 ' . $at->diffForHumans(),
+        ];
+    }
+}
+
+if (! function_exists('kokuu_credit_dashboard_data')) {
+    /**
+     * 仪表盘「积分」+「社区互联」两个容器所需的全部数据。
+     *
+     * 一次算完，视图里不再查库 —— 仪表盘不该有 N+1。
+     *
+     * @param  \App\Models\User|null  $user  当前登录用户；为 null（理论上不会发生）时降级
+     */
+    function kokuu_credit_dashboard_data(?User $user): array
+    {
+        $stats = kokuu_credit_stats();
+        $sign  = kokuu_credit_sign_status($user->last_sign_at ?? null);
+
+        // 今日已获得的积分与今日是否已签到是两件事，别混用
+        $todayEarned = $stats['today'];
+
+        $recent = [];
+        $ledgerOk = true;
+        try {
+            kokuu_credit_ensure_tables();
+            $recent = DB::table('credit_ledger')
+                ->where('uid', (int) ($user->uid ?? 0))
+                ->orderBy('id', 'desc')
+                ->limit(4)
+                ->get()
+                ->map(fn ($r) => [
+                    'delta'   => (int) $r->delta,
+                    'after'   => (int) $r->balance_after,
+                    'source'  => (string) $r->source,
+                    'at'      => (string) $r->created_at,
+                ])
+                ->all();
+        } catch (\Throwable $e) {
+            // 积分表还没建好时不应该让管理员打不开后台
+            $ledgerOk = false;
+        }
+
+        $labels = [
+            'thread' => '发起主题', 'reply' => '回复帖子',
+            'liked'  => '帖子被赞', 'manual' => '手动调整',
+            'legacy' => '历史补录',
+        ];
+
+        foreach ($recent as &$r) {
+            $r['source_label'] = $labels[$r['source']] ?? $r['source'];
+        }
+        unset($r);
+
+        // 社区互联：绑定关系
+        // ⚠️ 表里**没有** last_used_at，只有 updated_at（= 最近一次互通登录时间）。
+        //   写 last_used_at 会拿到 null，看起来像「从未绑定过」。
+        $bound   = false;
+        $lastUse = null;
+        try {
+            $row = DB::table('kokuu_sso_links')->where('uid', (int) ($user->uid ?? 0))->first();
+            $bound = $row !== null;
+            if ($row && ! empty($row->updated_at)) {
+                $lastUse = (string) $row->updated_at;
+            }
+        } catch (\Throwable $e) {
+            // 绑定表不存在时按未绑定展示
+        }
+
+        $cfg = kokuu_credit_config();
+
+        return [
+            'score'        => (int) ($user->score ?? 0),
+            'todayEarned'  => (int) $todayEarned,
+            'todayEvents'  => (int) $stats['events'],
+            'sign'         => $sign,
+            'recent'       => $recent,
+            'ledgerReady'  => $ledgerOk,
+            'bound'        => $bound,
+            'lastUse'      => $lastUse,
+            'forumUrl'     => $cfg['forum_url'],
+            'scoreThread'  => (int) $cfg['score_thread'],
+            'scoreReply'   => (int) $cfg['score_reply'],
+        ];
+    }
+}
+
+
 /*
  * ============================================================================
  *账号互通（SSO）—— 皮肤站作为 OAuth2 授权服务器
@@ -832,6 +952,21 @@ return function ($plugin) {
     ]);
 
     /*
+     * 仪表盘专用样式。
+     *
+     * 单独一个文件而不是并进 credit.css：仪表盘的 apple 风格样式
+     * 有 400 多行（含响应式与深色模式），而 credit.css 还要服务
+     * 流水页/配置页，混在一起两边都不好维护。
+     *
+     * ⚠️ `admin` 这一项是**精确匹配 /admin 本身**，
+     *   `admin/*` 才能覆盖 /admin/users 这类子页面，
+     *   两个都要写 —— 仪表盘正好是前者。
+     */
+    Hook::addStyleFileToPage($plugin->assets('dash.css'), [
+        'admin', 'admin/*',
+    ]);
+
+    /*
      * ---- 账号互通（SSO）路由 ----
      *
      * 分两类，鉴权方式完全不同，不能混：
@@ -1011,4 +1146,88 @@ return function ($plugin) {
             ]);
         })->middleware(['web']);
     });
+
+    /*
+     * ---- 后台仪表盘接管 ----
+     *
+     * 为什么用 `Filter::apply('grid:admin.index', ...)` 而不是直接改 core：
+     *   AdminController::index() 里写的是
+     *     $grid = $filter->apply('grid:admin.index', $grid);
+     *   这个钩子拿到的是**最终** $grid，我们可以整个替换掉。
+     *   于是 core 一个字都不用动，插件卸载后仪表盘自动恢复原样 ——
+     *   这也是不该去patch vendor 的原因。
+     *
+     * 替换掉什么：原grid 是
+     *   [ [ usage, notification ], [ chart ] ]
+     * 其中 usage 里有「角色数量」和「存储空间」两块 —— 这个站已经不做
+     * 皮肤托管了，只用来验证账号和记积分，这两块永远是没有意义的死数据。
+     * 现在只留两个容器：积分 + 社区互联。
+     *
+     * ⚠️ layout 的列数必须和 widgets 里的行**完全一致**，
+     *   shared/grid.twig 是 `grid.layout[行下标][列下标]` 取的，
+     *   对不上会直接渲染错位。
+     *
+     * ⚠️ 注册过滤器用 `Filter::add()`，**不是** `Filter::apply()` ——
+     *   apply() 是「执行」钩子的方法，add() 才是「注册」。
+     *   回调签名只有 `function ($grid)` 一个参数：
+     *   AdminController 调的是 `$filter->apply('grid:admin.index', $grid)`，
+     *   没传 $args，所以第二个参数不存在，写了也不会被调用。
+     *   返回值直接替换整个 $grid。
+     *
+     * ⚠️ 取实例必须用 `app(Blessing\Filter::class)`，**不能**用 `app('filter')` ——
+     *   容器里没有 'filter' 这个字符串绑定，实测直接抛
+     *   `Target class [filter] does not exist`。
+     *   而外层没有 catch，这个异常发生在 bootstrap 阶段，
+     *   表现是「插件看着启用了，仪表盘却毫无变化」—— 不报错，只是静默失效。
+     *
+     * 视图名解析：命名空间是 **manifest 里`namespace` 字段的原值**，
+     * 即 `KokuuStudio\KokuuCredit` —— **反斜杠**，不是短名 `kokuu-credit`。
+     * PluginManager::loadViewsAndTranslations() 做的是
+     *   $view->addNamespace($plugin->namespace, $path.'/views');
+     * 在 PHP 单引号字符串里写要双写反斜杠：`'KokuuStudio\\KokuuCredit::dashboard.credit'`。
+     *
+     * ⚠️ 用短名会直接 500，且报错只有一句
+     *   `Template "kokuu-credit::dashboard.credit" is not defined in "shared.grid" at line 7`
+     *   —— 不会提示正确名字。只能靠
+     *   `$app->make('view')->getFinder()->getHints()` 打出来确认。
+     * ⚠️⚠️ 数据必须用 `View::share()` 传进视图，**不能**在 twig 里写
+     *   `{{ kokuu_credit_dashboard_data(...) }}` ——
+     *   Twig 沙箱只放行注册过的函数，自定义 PHP 函数一律报
+     *     Unknown "kokuu_credit_dashboard_data" function
+     *   内核自带的是 auth_user / auth_check / auth_guest / auth_guard / url / trans，
+     *   **没有 `auth()`**（写了报 Unknown "auth" function）。
+     *   现有 ledger.twig 也是全靠 Controller 传变量，自己不调任何自定义函数。
+     *
+     *   share 的时机安全：AdminController 是先 apply() 再渲染 admin.index，
+     *   此刻视图还没开始输出。
+     */
+    app(\Blessing\Filter::class)->add('grid:admin.index', function ($grid) {
+        // 先算好数据挂到视图上，两个 widget 各自读，不重复查库
+        View::share('kcDash', kokuu_credit_dashboard_data(auth()->user()));
+
+        return [
+            'layout' => [
+                ['md-7', 'md-5'],
+            ],
+            'widgets' => [
+                // ⚠️⚠️ 三层嵌套，别少写一层！
+                //   shared/grid.twig 是：
+                //     for row in grid.widgets        <- 行
+                //       for col in row              <- 列
+                //         for widget in col        <- 挂在列里的 widget
+                //   core 原值[[usage, notification], [chart]] 就是这个形状：
+                //     行0 = [ 列0=[usage], 列1=[notification] ]
+                //     行1 = [ 列0=[chart] ]
+                //   我最初写成 [[w1, w2]]（行0 里只有 1 列，列里塞 2 个 widget），
+                //   结果第二个 widget 挤在第一列里上下堆叠，
+                //   截图上表现为「卡片全纵向排开」，而layout 的 md-5 根本没被消费。
+                [
+                    ['KokuuStudio\\KokuuCredit::dashboard.credit'],
+                    ['KokuuStudio\\KokuuCredit::dashboard.interop'],
+                ],
+            ],
+        ];
+    });
 };
+
+
