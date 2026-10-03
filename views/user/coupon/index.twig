@@ -1,0 +1,216 @@
+{% extends 'user.base.twig' %}
+
+{#
+  兑换码 + 抽奖（kokuu-coupon 用户页）
+
+  ————————————————————————————————————————————
+  ⚠️ twigbridge 的限制（写这个模板前必读）：
+  · 只有 trans() / url() / auth_user() / config() 等桥接函数，**没有 t()**
+  · 插件自定义的 kokuu_xxx() 函数在模板里**一律不可调用**
+  · **没有 max / min 过滤器**（实测 `|max` 整页 500 Unknown "max" filter）
+    所以概率百分比、累计区间、能不能抽等派生量，
+    全部在控制器（PHP）算好传进来，模板只负责显示。
+  · 可用 block 只有三个：title / content / before_foot
+    **没有 {% block scripts %}** → 资源必须放 before_foot
+
+  ⚠️ 别在这里再写 <h2>：内核 base 模板的 content-header 已用
+     {% block title %} 渲染了 <h1>。重复会出现两个标题。
+  ⚠️ help-text 里不要用 Markdown 的 **加粗** —— Twig 不渲染 Markdown，
+     星号会原样显示给用户。
+#}
+
+{% block title %}兑换码{% endblock %}
+
+{% block content %}
+<div class="container">
+  <p class="help-text">
+    输入管理员发放的兑换码，可以直接获得<b>积分</b>，或获得<b>抽奖机会</b>。
+    抽奖有机会拿到不同数量的积分，积分会直接进你的账户。
+  </p>
+
+  {# ===== 余额与次数概览 ===== #}
+  <div class="cp-hero">
+    <div class="cp-hero-col">
+      <div class="cp-hero-num" id="cp-balance">{{ balance }}</div>
+      <div class="cp-hero-label">当前积分</div>
+    </div>
+    <div class="cp-hero-col">
+      <div class="cp-hero-num" id="cp-draws">{{ draws }}</div>
+      <div class="cp-hero-label">可用抽奖次数</div>
+    </div>
+    <div class="cp-hero-col">
+      <div class="cp-hero-num" id="cp-odds-expect">{{ odds.expect }}</div>
+      <div class="cp-hero-label">单抽期望积分</div>
+    </div>
+  </div>
+
+  <div class="cp-hero-rate">
+    {% if drawCost > 0 %}
+      每次抽奖需 {{ drawCost }} 积分，或使用兑换码获得的抽奖次数
+    {% else %}
+      抽奖次数只能通过兑换码获得
+    {% endif %}
+    <span class="cp-dot">·</span>每次抽奖后至少保留 {{ keep }} 积分
+    {% if cfg.draw_cooldown > 0 %}
+      <span class="cp-dot">·</span>抽奖冷却 {{ cfg.draw_cooldown }} 秒
+    {% endif %}
+    {% if cfg.daily_draw_limit > 0 %}
+      <span class="cp-dot">·</span>每日抽奖上限 {{ cfg.daily_draw_limit }} 次
+    {% endif %}
+  </div>
+
+  {% if cfg.notice %}
+    <div class="alert alert-info">{{ cfg.notice }}</div>
+  {% endif %}
+
+  {% if cooldown > 0 %}
+    <div class="alert alert-warning" id="cp-cooldown-alert">
+      冷却中，请 <b id="cp-cooldown">{{ cooldown }}</b> 秒后再试。
+    </div>
+  {% endif %}
+
+  {# ===== 兑换码表单 ===== #}
+  <div class="cp-card">
+    <label class="cp-label" for="cp-code">兑换码</label>
+    <div class="cp-code-row">
+      <input type="text" id="cp-code" class="form-control" placeholder="例如 KOKUUXXXXXXXX"
+             autocomplete="off" spellcheck="false" maxlength="64">
+      <button type="button" id="cp-redeem" class="Button Button--primary cp-redeem">兑换</button>
+    </div>
+    <p class="help-text" id="cp-code-hint">
+      {% if cfg.daily_redeem_limit > 0 %}
+        兑换码不区分大小写。今日最多可兑换 {{ cfg.daily_redeem_limit }} 个。
+      {% else %}
+        兑换码不区分大小写。
+      {% endif %}
+    </p>
+  </div>
+
+  {# ===== 抽奖 ===== #}
+  <div class="cp-card">
+    <div class="cp-draw-head">
+      <span class="cp-label">抽奖</span>
+      {#
+        canDraw / canByCost / draws 全部由 PHP 侧算好。
+        模板不做「余额 - 底仓 >= 单价」这类判断 —— 放这里就多一处漂移点。
+      #}
+      <span class="help-text" id="cp-draw-why">
+        {% if draws > 0 %}
+          你有 <b>{{ draws }}</b> 次抽奖机会可用。
+        {% elseif canByCost %}
+          将扣除 <b>{{ drawCost }}</b> 积分抽一次。
+        {% else %}
+          {% if drawCost > 0 %}
+            积分不足：需要 {{ drawCost }} 积分，且需保留 {{ keep }} 积分（当前可用 {{ spendable }}）。
+          {% else %}
+            暂无抽奖次数，可通过兑换码获得。
+          {% endif %}
+        {% endif %}
+      </span>
+    </div>
+    <button type="button" id="cp-draw" class="Button Button--primary cp-draw-btn"
+            {% if not canDraw or cooldown > 0 %}disabled{% endif %}>
+      {% if cooldown > 0 %}冷却中…{% else %}立即抽奖{% endif %}
+    </button>
+    <div class="cp-result" id="cp-result" hidden></div>
+  </div>
+
+  {# ===== 概率表 ===== #}
+  <div class="cp-card">
+    <div class="cp-label">奖品概率</div>
+    {% if odds.rows is empty %}
+      <p class="help-text">管理员还没有配置奖品。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead>
+          <tr><th>奖品</th><th>积分</th><th>概率</th><th>区间</th></tr>
+        </thead>
+        <tbody>
+          {% for r in odds.rows %}
+            <tr>
+              <td>{{ r.label }}</td>
+              <td>{{ r.amount }}</td>
+              <td>{{ r.percent }}%</td>
+              <td>{{ r.from }}% ~ {{ r.to }}%</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+
+  {# ===== 我的记录 ===== #}
+  <div class="cp-card">
+    <div class="cp-label">我的兑换记录</div>
+    {% if myCodes is empty %}
+      <p class="help-text">还没有兑换过。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>时间</th><th>类型</th><th>获得</th></tr></thead>
+        <tbody>
+          {% for r in myCodes %}
+            <tr>
+              <td>{{ r.created_at }}</td>
+              <td>{% if r.type == 'draw' %}抽奖次数{% else %}积分{% endif %}</td>
+              <td>{{ r.value }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+
+  <div class="cp-card">
+    <div class="cp-label">我的抽奖记录</div>
+    {% if myDraws is empty %}
+      <p class="help-text">还没有抽过奖。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>时间</th><th>奖品</th><th>积分</th><th>消耗</th></tr></thead>
+        <tbody>
+          {% for r in myDraws %}
+            <tr>
+              <td>{{ r.created_at }}</td>
+              <td>{{ r.prize_label }}</td>
+              <td>{{ r.amount }}</td>
+              <td>{% if r.via == 'code' %}次数{% else %}积分{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{#
+  资源放before_foot —— 内核 base 模板唯一的资源注入点（没有 block scripts）
+#}
+{% block before_foot %}
+<link rel="stylesheet" href="{{ url('/plugins/kokuu-coupon/assets/coupon.css') }}">
+
+{#
+  ⚠️ 所有派生量由后端算好后注入，前端**不重复推导**。
+     底仓/余额/次数三处一旦漂移，用户会看到「能抽但必失败」。
+     后端是唯一权威（见 kokuu_coupon_draw 的两处校验）。
+
+  ⚠️ CSRF：路由挂了 web 中间件（含 VerifyCsrfToken），
+     不带 X-XSRF-TOKEN 一律 419「CSRF token mismatch.」。
+     值取自 XSRF-TOKEN cookie —— Laravel 写它时用了 CookieValuePrefix 前缀，
+     所以 JS 这边**只 decodeURIComponent，不要剥前缀**。
+#}
+<script>
+  window.CPN_URL_REDEEM = "{{ url('/plugin/kokuu-coupon/redeem') }}";
+  window.CPN_URL_DRAW   = "{{ url('/plugin/kokuu-coupon/draw') }}";
+  window.CPN_DRAW_COST  = {{ drawCost }};
+  window.CPN_KEEP       = {{ keep }};
+  window.CPN_BALANCE    = {{ balance }};
+  window.CPN_DRAWS      = {{ draws }};
+  window.CPN_COOLDOWN   = {{ cooldown }};
+  window.CPN_CSRF = (function () {
+    var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  })();
+</script>
+<script src="{{ url('/plugins/kokuu-coupon/assets/coupon.js') }}"></script>
+{% endblock %}

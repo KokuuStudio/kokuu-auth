@@ -1,0 +1,209 @@
+/* kokuu-coupon · 兑换码 + 抽奖
+ *
+ * ── 作用域 ────────────────────────────────────────────────
+ * 一律用 .cp- 前缀，不与内核 / kokuu-ui / kokuu-exchange 的类名冲突。
+ * （kokuu-exchange 用 .ex-，kokuu-credit 用 .kc-/.kyCard-）
+ *
+ * ── 配色来源 ──────────────────────────────────────────────
+ * 颜色一律走 apple.css 的 --a-* 变量，跟着主题走，**别硬编码**。
+ * 作用域用 `body.kokuu-apple .cp-xxx`：
+ *   ⚠️ 记忆铁律「给 <a>/按钮设color 一律带 body.kokuu-apple」——
+ *      全局 a{color:var(--rain)} 特异度 (0,0,1)，
+ *      而 body.kokuu-apple a 是 (0,1,2)，**一直赢**；
+ *      `body .xxx` 只有 (0,1,1)，会输。
+ *   kokuu-apple 由 apple-scope.js 在 DOMContentLoaded 时打上，
+ *   插件页（plugin/*）已被 kokuu-ui 覆盖到。
+ *
+ * ── 对比度（WCAG AA）────────────────────────────────────
+ * 正文 ≥4.5:1。不要用 opacity 压次要文字 —— 那等于把字变灰，
+ * 暗色下更会叠加成「灰上加灰」。要压就压实色。
+ */
+
+/* ============ Hero：三列概览 ============ */
+.cp-hero {
+  display: flex;
+  gap: 12px;
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.08));
+  border-radius: var(--a-radius-lg, 16px);
+  padding: 20px 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--a-shadow, 0 1px 2px rgba(0, 0, 0, 0.04));
+}
+.cp-hero-col { flex: 1; text-align: center; min-width: 0; }
+.cp-hero-num {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--a-text, #1c1c1e);
+  font-variant-numeric: tabular-nums;
+}
+.cp-hero-label {
+  color: var(--a-text-2, #626c7e);
+  font-size: 13px;
+  margin-top: 4px;
+}
+.cp-hero-rate {
+  color: var(--a-text-3, #767d8a);
+  font-size: 12px;
+  text-align: center;
+  margin-bottom: 18px;
+  line-height: 1.7;
+}
+.cp-dot { margin: 0 6px; }
+
+/* ============ 卡片 ============ */
+.cp-card {
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.07));
+  border-radius: var(--a-radius, 12px);
+  padding: 18px;
+  margin-bottom: 20px;
+}
+body.dark-mode .cp-card {
+  background: var(--a-surface, rgba(255, 255, 255, 0.04));
+  border-color: var(--a-sep-strong, rgba(255, 255, 255, 0.09));
+}
+
+.cp-label {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--a-text, #1c1c1e);
+}
+
+/* ============ 兑换码输入 ============ */
+.cp-code-row { display: flex; gap: 10px; align-items: stretch; }
+.cp-code-row .form-control {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 兑换码是大写字母数字，字距稍微放开一点更好辨认 */
+  letter-spacing: .06em;
+}
+.cp-redeem { flex-shrink: 0; white-space: nowrap; }
+
+.cp-code-row + .help-text,
+#cp-code-hint { margin-top: 8px; }
+
+/* ============ 抽奖 ============ */
+.cp-draw-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.cp-draw-head .cp-label { margin-bottom: 0; }
+.cp-draw-btn { width: 100%; }
+
+/* 结果提示条。
+   ⚠️ 不用 transform 做入场动画：会创建层叠上下文，
+   卡片里若有下拉菜单会 z-index 出不去（记忆铁律）。 */
+.cp-result {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--a-radius, 12px);
+  font-size: 14px;
+  line-height: 1.6;
+  border: 1px solid transparent;
+}
+.cp-result.info {
+  background: var(--a-surface-2, #f5f5f7);
+  border-color: var(--a-sep, rgba(0, 0, 0, 0.07));
+  color: var(--a-text, #1c1c1e);
+}
+.cp-result.ok {
+  background: rgba(52, 199, 89, 0.12);
+  border-color: rgba(52, 199, 89, 0.32);
+  color: #1d7a37;
+}
+.cp-result.err {
+  background: rgba(255, 69, 58, 0.10);
+  border-color: rgba(255, 69, 58, 0.30);
+  color: #b3261e;
+}
+body.dark-mode .cp-result.ok { color: #6ee79b; }
+body.dark-mode .cp-result.err { color: #ff9a91; }
+
+/* ============ 表格 ============ */
+.cp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  /* 表格在窄屏容易被长码撑破，允许横向滚动 */
+  display: block;
+  overflow-x: auto;
+}
+.cp-table th,
+.cp-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--a-sep, rgba(0, 0, 0, 0.07));
+  white-space: nowrap;
+}
+.cp-table th {
+  color: var(--a-text-2, #626c7e);
+  font-weight: 600;
+  font-size: 12px;
+}
+.cp-table td { color: var(--a-text, #1c1c1e); }
+.cp-table tbody tr:last-child td { border-bottom: none; }
+
+/* 记录里的兑换码/批次号用等宽字体，便于核对 */
+.cp-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+
+/* ============ 管理页 ============ */
+.cp-admin-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+.cp-admin-field { display: flex; flex-direction: column; gap: 4px; }
+.cp-admin-field label {
+  font-size: 12px;
+  color: var(--a-text-2, #626c7e);
+  font-weight: 600;
+}
+.cp-admin-field .form-control { min-width: 120px; }
+
+.cp-stat-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.cp-stat {
+  flex: 1 1 130px;
+  background: var(--a-surface-2, #f5f5f7);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.07));
+  border-radius: var(--a-radius, 10px);
+  padding: 12px 14px;
+}
+.cp-stat-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--a-text, #1c1c1e);
+  font-variant-numeric: tabular-nums;
+}
+.cp-stat-label {
+  font-size: 12px;
+  color: var(--a-text-2, #626c7e);
+  margin-top: 2px;
+}
+
+/* ============ 响应式 ============ */
+@media (max-width: 768px) {
+  .cp-hero { padding: 16px 10px; gap: 6px; }
+  .cp-hero-num { font-size: 24px; }
+  .cp-hero-label { font-size: 12px; }
+  .cp-code-row { flex-direction: column; }
+  .cp-redeem { width: 100%; }
+}
