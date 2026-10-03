@@ -1,0 +1,14 @@
+{
+  "name": "kokuu-exchange",
+  "version": "1.0.0",
+  "title": "KokuuSkin 积分兑换",
+  "description": "把论坛积分（users.score，账本在 kokuu-credit）兑换成游戏内 CMI 货币。采用「直连发放」模式：玩家在皮肤站点一下即生成订单，MC 端 KokuuBridge 插件轮询领取队列并就地发放，玩家无需输入任何兑换码。订单强绑定 players 表里的具体角色（CMI 认玩家名，扣的是那个角色的余额），带幂等键与状态机，重复领取不会双发。",
+  "author": "KokuuStudio",
+  "namespace": "KokuuStudio\\KokuuExchange",
+  "config": "config.blade.php",
+  "require": {
+    "kokuu-credit": "^1.0.0",
+    "blessing-skin-server": "^6.0",
+    "php": ">=8.1"
+  }
+}

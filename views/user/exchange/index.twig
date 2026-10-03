@@ -1,0 +1,147 @@
+{% extends 'user.base.twig' %}
+
+{#
+  玩家兑换页
+  ————————————————————————————————————————————
+  ⚠️ twigbridge 的限制（写这个模板前必读）：
+  · 只有 trans() / url() / auth_user() / config() 等桥接函数，**没有 t()**
+  · 插件自定义的 kokuu_xxx() 函数在模板里**一律不可调用**
+    → 所以所有派生计算（相对时间、状态文案、金额换算）必须在 PHP 侧做完再传进来
+  · 想拿到内核侧边栏就必须用 Twig（Blade 无法 extends user/base.twig）
+
+  ⚠️ 可用的 block 只有三个（实测 resources/views/user/base.twig）：
+    title / content / before_foot
+    **没有 {% block scripts %}** —— 写了也不会渲染，JS/CSS 不会被加载。
+    所以资源必须放在 before_foot（它在 </body> 之前）。
+#}
+
+{% block title %}积分兑换{% endblock %}
+
+{% block content %}
+<div class="container">
+  {# ⚠️ 不要在这里再写 <h2>积分兑换</h2> ——
+     内核 user/base.twig 的 content-header 已经用 {% block title %} 渲染了
+     <h1>积分兑换</h1>。重复写会在页面上连着出现两个标题。
+     同理 help-text 里不要用 Markdown 的 **加粗** ——
+     Twig 不会渲染 Markdown，星号会原样显示给用户（已实测踩过）。 #}
+  <p class="help-text">
+    论坛（chat.kokuu.org）赚到的积分可以换成游戏内货币。
+    提交后会自动发到你在下面选择的角色，<b>不需要进游戏输入任何兑换码</b>。
+  </p>
+
+  {# ===== 余额与规则 ===== #}
+  <div class="ex-hero">
+    <div class="ex-hero-num" id="ex-balance">{{ balance }}</div>
+    <div class="ex-hero-label">当前可用积分</div>
+    <div class="ex-hero-rate">
+      {{ cfg.cost_per_unit }} 积分 = 1 单位游戏货币
+      {% if cfg.cooldown > 0 %}<span class="ex-dot">·</span>每 {{ cfg.cooldown }} 秒可兑换一次{% endif %}
+      {% if cfg.daily_limit > 0 %}<span class="ex-dot">·</span>每日上限 {{ cfg.daily_limit }} 单位（今日已用 {{ dailyUsed }}）{% endif %}
+    </div>
+  </div>
+
+  {% if notice is defined and notice %}
+    <div class="alert alert-info">{{ notice }}</div>
+  {% endif %}
+
+  {% if cooldown > 0 %}
+    <div class="alert alert-warning" id="ex-cooldown-alert">
+      冷却中，请 <b id="ex-cooldown">{{ cooldown }}</b> 秒后再试。
+    </div>
+  {% endif %}
+
+  {% if players is empty %}
+    <div class="alert alert-danger">
+      你名下还没有角色。请先到皮肤站创建一个角色后再来兑换。
+    </div>
+  {% else %}
+    {# ===== 兑换表单 ===== #}
+    {#成本与预览在 PHP 侧算好，模板只负责显示 —— 见 controller 传入的 cost/amount #}
+    <div class="ex-card">
+      <label class="ex-label" for="ex-units">兑换数量（游戏货币单位）</label>
+      <div class="ex-units-row">
+        <input type="number" id="ex-units" class="form-control" value="1" min="{{ cfg.min_units }}"
+               {% if cfg.max_units > 0 %}max="{{ cfg.max_units }}"{% endif %} step="1">
+        <div class="ex-quick">
+          {% for q in [1, 5, 10, 50] %}
+            <button type="button" class="ex-quick-btn" data-q="{{ q }}">{{ q }}</button>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="ex-preview" id="ex-preview">
+        <span id="ex-preview-text">将消耗</span> <b id="ex-cost">-</b> 积分，
+        兑换 <b id="ex-amount">-</b> 单位货币
+      </div>
+
+      <label class="ex-label" for="ex-player">发到哪个角色</label>
+      <select id="ex-player" class="form-control">
+        {% for p in players %}
+          <option value="{{ p.pid }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <p class="help-text">
+        货币会直接进入该角色。如果你有多个角色，请确认选对了 ——
+        选错后无法转移。
+      </p>
+
+      <button id="ex-submit" class="Button Button--primary ex-submit">确认兑换</button>
+      <div id="ex-msg" class="ex-msg"></div>
+    </div>
+  {% endif %}
+
+  {# ===== 我的订单 ===== #}
+  <h3 class="ex-h3">我的兑换记录</h3>
+  <div class="ex-table-wrap">
+    <table class="table ex-table" id="ex-orders">
+      <thead>
+        <tr>
+          <th>订单号</th>
+          <th>角色</th>
+          <th class="ex-num">数量</th>
+          <th class="ex-num">积分</th>
+          <th>状态</th>
+          <th>时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr data-status="{{ o.status }}">
+            <td><code>{{ o.order_no }}</code></td>
+            <td>{{ o.player_name }}</td>
+            <td class="ex-num">{{ o.units }}</td>
+            <td class="ex-num">-{{ o.cost }}</td>
+            <td>
+              {% if o.status == 'pending' %}
+                <span class="ex-badge ex-badge-pending">发放中</span>
+              {% elseif o.status == 'done' %}
+                <span class="ex-badge ex-badge-done">已到账</span>
+              {% elseif o.status == 'failed' %}
+                <span class="ex-badge ex-badge-failed">发放失败</span>
+              {% elseif o.status == 'refunded' %}
+                <span class="ex-badge ex-badge-refunded">已退款</span>
+              {% else %}
+                <span class="ex-badge">{{ o.status }}</span>
+              {% endif %}
+            </td>
+            <td class="ex-time">{{ o.created_at }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="ex-empty">还没有兑换记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="help-text">
+    状态是「发放中」时游戏端可能还没连上，稍等几秒刷新页面即可。
+    超过 24 小时仍未到账会自动退回积分。
+  </p>
+</div>
+{% endblock %}
+
+{#资源放在 before_foot —— 内核 base 模板唯一的资源注入点（没有 block scripts） #}
+{% block before_foot %}
+<link rel="stylesheet" href="{{ url('/plugins/kokuu-exchange/assets/exchange.css') }}">
+<script>window.EX_CREATE_URL = "{{ url('/plugin/kokuu-exchange/create') }}";window.EX_COST = {{ cfg.cost_per_unit }};window.EX_MIN = {{ cfg.min_units }};</script>
+<script src="{{ url('/plugins/kokuu-exchange/assets/exchange.js') }}"></script>
+{% endblock %}

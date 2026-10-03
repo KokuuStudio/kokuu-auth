@@ -1,0 +1,204 @@
+/* kokuu-exchange · 积分兑换
+ *
+ * 作用域一律用 .ex- 前缀，不与内核/kokuu-ui 的类名冲突。
+ * 暗色模式靠 body.dark-mode（内核 base.twig 真实输出的 class），
+ * **不要写 body.kokuu-apple** —— 那个类从未被任何 PHP 添加过。
+ *
+ * ── 对比度（WCAG AA，由 ops/exchange_check.js 实测守住）────────────
+ * 正文需 ≥4.5:1，大字（≥24px 或 ≥18.66px/700）≥3:1。
+ * v1.0 初版实测踩了 4 处：
+ *   1) 渐变 #7c5cff→#4f9dff 太亮，白字只有 4.35:1 → 渐变整体压深
+ *   2) .ex-hero-label/.ex-hero-rate 用 opacity 压白字 → 等于把字变灰，
+ *      去掉 opacity，改用略暗的实色
+ *   3) .ex-empty #97a1b2 on 白 = 2.61:1（表格空态几乎看不见）→ 压深
+ *   4) .ex-time / .ex-stat-label #8a94a6 on 白 = 3.1:1 → 一并压深
+ * 改任何颜色后必须重跑 node ops/exchange_check.js 看 LOW 行。
+ */
+
+/* 深一档的渐变：白字压在两端都 ≥4.5:1。
+   （原来的 #7c5cff/#4f9dff 在 #4f9dff 那头只有 4.35:1） */
+.ex-hero {
+  background: linear-gradient(135deg, #5b3fd6 0%, #2f6fd0 100%);
+  border-radius: 14px;
+  padding: 22px 20px;
+  color: #fff;
+  text-align: center;
+  margin-bottom: 18px;
+  box-shadow: 0 10px 28px -14px rgba(63, 48, 168, 0.7);
+}
+.ex-hero-num { font-size: 40px; font-weight: 700; line-height: 1.1; }
+/* ⚠️ 不要用 opacity 压次要文字 —— 那等于降低对比度，
+   暗色模式下更会叠加成「灰上加灰」。要压就压实色。 */
+.ex-hero-label { color: #e6e2ff; font-size: 13px; margin-bottom: 6px; }
+.ex-hero-rate { color: #dcd9f7; font-size: 12px; }
+.ex-dot { margin: 0 6px; }
+
+.ex-card {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+body.dark-mode .ex-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.ex-label {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  margin: 14px 0 6px;
+}
+.ex-label:first-child { margin-top: 0; }
+
+.ex-units-row { display: flex; gap: 8px; align-items: center; }
+.ex-units-row .form-control { flex: 1 1 auto; min-width: 0; }
+.ex-quick { display: flex; gap: 4px; flex: 0 0 auto; }
+.ex-quick-btn {
+  min-width: 38px;
+  padding: 6px 8px;
+  border: 1px solid #cfd6e4;
+  background: #f6f8fc;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #33415c;
+}
+.ex-quick-btn:hover { background: #eaeffb; }
+body.dark-mode .ex-quick-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #d6dbe6;
+}
+
+.ex-preview {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  background: #f2f6ff;
+  border-radius: 9px;
+  font-size: 13px;
+  color: #33415c;
+}
+body.dark-mode .ex-preview { background: rgba(124, 92, 255, 0.12); color: #cfd6e6; }
+.ex-preview.is-bad { background: #ffecec; color: #b02a2a; }
+body.dark-mode .ex-preview.is-bad { background: rgba(220, 60, 60, 0.16); color: #ffb4b4; }
+
+.ex-submit {
+  margin-top: 14px;
+  width: 100%;
+  padding: 11px;
+  font-size: 15px;
+  border-radius: 10px;
+  border: 0;
+  cursor: pointer;
+  color: #fff;
+  /* 与 .ex-hero 同一套深色渐变：白字对比度 ≥4.5:1。
+     这是全页最重要的操作按钮，不能只卡在 4.35:1。 */
+  background: linear-gradient(135deg, #5b3fd6, #2f6fd0);
+}
+.ex-submit:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.ex-msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+.ex-msg.is-ok { color: #1a7f4b; }
+.ex-msg.is-err { color: #c0392b; }
+body.dark-mode .ex-msg.is-ok { color: #6ee7a8; }
+body.dark-mode .ex-msg.is-err { color: #ff9d9d; }
+
+.ex-h3 { margin: 24px 0 10px; font-size: 16px; font-weight: 600; }
+
+.ex-table-wrap {
+  overflow-x: auto;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 12px;
+}
+body.dark-mode .ex-table-wrap {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+.ex-table { margin: 0; width: 100%; border-collapse: collapse; font-size: 13px; }
+.ex-table th, .ex-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  white-space: nowrap;
+}
+body.dark-mode .ex-table th,
+body.dark-mode .ex-table td { border-bottom-color: rgba(255, 255, 255, 0.07); }
+.ex-table th { font-weight: 600; color: #4d5768; font-size: 12px; }
+body.dark-mode .ex-table th { color: #b9c2d4; }
+.ex-num { text-align: right; }
+/* #8a94a6 on 白 = 3.1:1，压深到 4.6:1 */
+.ex-time { color: #626c7e; font-size: 12px; }
+/* #97a1b2 on 白 = 2.61:1 —— 空态提示几乎看不见，压深 */
+.ex-empty { text-align: center; color: #5d6675; padding: 22px 0; }
+
+.ex-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ex-badge-pending  { background: #fff3d6; color: #a06b00; }
+.ex-badge-done     { background: #ddf5e6; color: #1a7f4b; }
+.ex-badge-failed   { background: #ffe0e0; color: #b02a2a; }
+.ex-badge-refunded { background: #eceff4; color: #5b6577; }
+body.dark-mode .ex-badge-pending  { background: rgba(255, 200, 60, 0.16);  color: #ffdc8a; }
+body.dark-mode .ex-badge-done     { background: rgba(60, 200, 120, 0.16);  color: #86e5b4; }
+body.dark-mode .ex-badge-failed   { background: rgba(255, 90, 90, 0.18);   color: #ff9d9d; }
+body.dark-mode .ex-badge-refunded { background: rgba(255, 255, 255, 0.08); color: #b3bccc; }
+
+.ex-reason { font-size: 11px; color: #b02a2a; max-width: 220px; white-space: normal; margin-top: 3px; }
+
+.ex-stats {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ex-stat {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 11px;
+  padding: 13px 10px;
+  text-align: center;
+}
+body.dark-mode .ex-stat {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+.ex-stat-num { font-size: 22px; font-weight: 700; color: #3a51bd; }
+.ex-stat-label { font-size: 11px; color: #626c7e; margin-top: 2px; }
+body.dark-mode .ex-stat-num { color: #a8bcff; }
+body.dark-mode .ex-stat-label { color: #a9b3c6; }
+
+.ex-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 18px;
+}
+.ex-check { display: block; margin: 14px 0 4px; font-size: 13px; font-weight: 600; }
+.ex-check input { margin-right: 6px; }
+
+/* ══════════════ 移动端（用户实测主要在手机端用） ══════════════ */
+@media (max-width: 768px) {
+  .ex-stats { grid-template-columns: repeat(3, 1fr); }
+  .ex-form-grid { grid-template-columns: 1fr; }
+  .ex-hero-num { font-size: 32px; }
+
+  /* 表格在窄屏会横向溢出整个页面 —— 限制在容器内滚动，
+     否则整页会出现横向滚动条（用户之前抱怨过「挤在一起」）。 */
+  .ex-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+  .ex-table { min-width: 520px; }
+
+  .ex-units-row { flex-wrap: wrap; }
+  .ex-units-row .form-control { flex: 1 1 100%; }
+  .ex-quick { width: 100%; }
+  .ex-quick-btn { flex: 1 1 0; min-width: 0; }
+}
