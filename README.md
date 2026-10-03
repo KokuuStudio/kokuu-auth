@@ -70,6 +70,19 @@ POST /plugin/kokuu-credit/api/earn
 ⚠️ **服务端到服务端的 API 路由不能用 `web` 中间件** ——
 `VerifyCsrfToken` 会拦成 `419 Page Expired`。后台页面保留 `web`（需要 session）。
 
+### ⚠️ 配置端点返回的字段名（前端别猜）
+
+配置页的内联 JS 直接消费这些端点，字段名对不上就是静默的「表格空白」：
+
+| 端点 | 关键字段 |
+|---|---|
+| `api/ledger` | `created_at` / `nickname` / `delta` / `balance_after` / `source_label` |
+| `api/sso-status` | **`client_ready`**（不是 `ready`） |
+| `api/sso-links` | **`nickname` / `last_email` / `last_seen`**（不是 `email` / `created_at`） |
+
+最后两行的字段名都踩过：写成直觉名字时接口正常 200、页面就是不显示数据，
+因为 JS 读 `undefined` 不会报错。
+
 ---
 
 ## 二、账号互通（OAuth2）
@@ -190,6 +203,20 @@ widgets: [[[dashboard.credit], [dashboard.interop]]]
 |---|---|---|
 | 积分 | `views/dashboard/credit.twig` | 余额主卡（46px 大数字 + 今日获得/今日笔数 + 签到状态）+ 最近 4 笔变动 |
 | 社区互联 | `views/dashboard/interop.twig` | 互通状态 pill、论坛地址、当前账号、加分规则、前往论坛 CTA |
+
+### ⚠️ 来源标签表只有一处定义
+
+`credit_ledger.source` → 中文标签的映射**必须**只维护一份：
+
+```php
+kokuu_credit_source_labels(): array   // 权威映射表
+kokuu_credit_source_label($source)    // 单值查询，内部委托上面那个
+```
+
+历史教训：这份表曾散在**三个地方**（仪表盘内联数组 / `kokuu_credit_source_label()` / 流水路由），
+结果 `manual` 在仪表盘写「手动调整」、在流水页写「管理员手动」——
+**同一笔流水在两个页面上文案不一样**。现在仪表盘 `foreach` 和流水路由的
+`sourceLabels` 都改成调 `kokuu_credit_source_labels()`，只有一处定义就不会再漂移。
 
 数据由 `kokuu_credit_dashboard_data()` 一次算好，
 在 grid 钩子里 `View::share('kcDash', ...)` 挂上，两个 widget 各自读，
@@ -329,6 +356,66 @@ Hook::addRoute(function ($router) use ($plugin) {
 它是 `view()->file($path)`，不是控制器。所以配置页里的实时值
 **不能靠 `View::share`**（那是启动时快照，保存后仍显示旧值），
 要用 `@php` 在视图里直接调 `kokuu_credit_config()` / `kokuu_sso_config()`。
+
+### 2b. 配置页必须**自包含**（不能 `@extends`）
+
+配置页走的是 `PluginController@config` → `$plugin->getConfigView()` →
+**`view()->file($path)`** —— 这是一次**独立 Blade 渲染，不经过布局继承链**。
+
+后果：
+
+- `@extends('admin._base')` 会直接 `View [admin._base] not found`
+  （顺便说，`admin._base` 这个视图**全站根本不存在**，唯一引用就是它）
+- `Hook::addStyleFileToPage` / `addScriptFileToPage` 对配置页**完全无效**。
+  这两个钩子最终由 `HeadComposer` 消费，写进的是**内核 Twig 布局**的 head/页脚；
+  配置页压根不走布局，钩子即使「匹配成功」（`request()->is('admin/*') === true`）
+  也没有人渲染它。
+
+实测：抓 `/admin/plugins/config/kokuu-credit`，HTML 里**一个 `<script>` 都没有**。
+
+所以 `views/config.blade.php` 从 `<!DOCTYPE html>` 开始整页自包含：
+自己 `<link>` 内核 `app/style.*.css` + `kokuu-ui/apple.css`，
+CSS 与 JS 全部内联（`kokuu-quote` 早就这么做了，这是本仓库的既定范式）。
+
+### 2c. 内联脚本要避开 `.kc-table`（深色流水页专用）
+
+`assets/dash.css` 里 `.kc-table` 是**深色系**（`#EEEDFE` 文字 / `#534AB7` 边框），
+只服务流水页。但 `credit.js` 往 `#kc-ledger` 塞的也是 `.kc-table`，
+在配置页的浅色底上会**白字白底**。处理办法是只在这几个容器内覆盖回浅色，
+不去动全局 `.kc-table`：
+
+```css
+#kc-ledger .kc-table td, #kc-sso-links .kc-table td, #kc-sso-detail .kc-table td { /* 浅色 */ }
+```
+
+另：`credit.js` 会造 `div.kc-toast`，但 `credit.css` **没有 `.kc-toast` 规则**
+（在流水页它也是裸文字）。配置页补上了完整样式。
+
+### 2d. 改完 Blade 要清 `storage/framework/views/*.php`
+
+`artisan view:clear` 与手动删 `views/twig/` **都不清** Blade 编译缓存。
+症状：改了 `config.blade.php`，HTTP 仍返回旧的 17754 字节，
+而 CLI `php` 直接渲染却是新的 26326 字节 —— **两者不一致就是缓存问题**。
+
+```bash
+rm -f /var/www/kokuu-auth/storage/framework/views/*.php
+systemctl reload php8.1-fpm
+```
+
+### 2e. `public/plugins/<插件>/` 目录属主也要是 `www-data`
+
+静态资源有两份，nginx 服务的是 `public/plugins/` 那份。
+`App\Listeners\CopyPluginAssets` 在插件启用/版本变化时把
+`plugins/<name>/assets` 复制过去 —— **是以 PHP-FPM 身份（`www-data`）写的**。
+
+如果 `public/plugins/<插件>/` 本身是 `root:root`，下次复制会：
+
+```
+copy(...): Failed to open stream: Permission denied
+```
+
+→ 插件页 500。`kokuu-sync-assets` 原本只 `chown` 了子目录 `assets/`，
+漏了**父目录**，已修补成同时 chown `$SITE/public/plugins/$p`。
 
 ### 3. 保存配置后必须删 options 文件缓存
 
@@ -545,14 +632,28 @@ cd /var/www/kokuu-auth
 sudo -u www-data php artisan view:clear
 sudo -u www-data php artisan route:clear
 sudo -u www-data php artisan cache:clear
-rm -rf storage/framework/views/twig          # 见坑 11
+rm -f  storage/framework/views/*.php        # 见坑 2d（Blade 编译缓存）
+rm -rf storage/framework/views/twig         # 见坑 11（Twig 编译缓存）
+chown -R www-data:www-data storage/ bootstrap/cache/
 systemctl reload php8.1-fpm
-/usr/local/bin/kokuu-sync-assets kokuu-credit# 静态资源有 public/ 和 plugins/ 两份
+/usr/local/bin/kokuu-sync-assets kokuu-credit   # 静态资源有 public/ 和 plugins/ 两份
 ```
 
 ⚠️ `artisan` 必须用**FPM 的运行用户**（本机是 `www-data`）。
 用别的用户跑会因为读不到 `.env` 而报
 `Access denied for user 'forge'@'localhost'`。
+
+⚠️ **opcache 会让新代码「部分生效」**，症状极像「文件没传上去」。
+改完 PHP 必须 `systemctl reload php8.1-fpm`，光 `cache:clear` 不够。
+
+### 验证部署成功的判据
+
+| 改了什么 | 怎么验证 |
+|---|---|
+| PHP 代码 | `md5sum` 线上文件 == 本地；`php -l` 无错；日志无新异常 |
+| CSS/JS 资源 | `curl -sI <URL>` 的 `Content-Length` == 磁盘文件字节数 |
+| Twig 模板 | 渲染输出字节数变化；清 `views/twig/` 后复验 |
+| Blade 模板 | 抓页面看**字节数变化** + 关键字（如 `<script>` 个数）；<br>CLI 渲染与 HTTP 渲染字节数**不一致 = 缓存没清** |
 
 ## 配置项
 

@@ -343,14 +343,13 @@ if (! function_exists('kokuu_credit_dashboard_data')) {
             $ledgerOk = false;
         }
 
-        $labels = [
-            'thread' => '发起主题', 'reply' => '回复帖子',
-            'liked'  => '帖子被赞', 'manual' => '手动调整',
-            'legacy' => '历史补录',
-        ];
-
+        // ⚠️ 不要在这里再抄一份标签表。
+        //    曾有三份副本（此处 / kokuu_credit_source_label() / ledger 路由），
+        //    结果 manual 被写成「手动调整」vs「管理员手动」两种文案，
+        //    同一个来源在仪表盘和流水页显示得不一样。
+        //    统一走 kokuu_credit_source_label()，只有一处定义就不会再漂移。
         foreach ($recent as &$r) {
-            $r['source_label'] = $labels[$r['source']] ?? $r['source'];
+            $r['source_label'] = kokuu_credit_source_label((string) $r['source']);
         }
         unset($r);
 
@@ -567,15 +566,30 @@ if (! function_exists('kokuu_sso_ensure_client')) {
     }
 }
 
-if (! function_exists('kokuu_credit_source_label')) {
-    function kokuu_credit_source_label(string $source): string
+if (! function_exists('kokuu_credit_source_labels')) {
+    /**
+     * 积分来源 → 中文标签的**唯一**映射表。
+     *
+     * ⚠️ 这是权威定义，其他地方一律调本函数，不要再抄一份数组。
+     *    历史教训：曾经有三份副本，`manual` 在一处写「手动调整」、
+     *    另两处写「管理员手动」，同一笔流水在仪表盘和流水页显示不同文案。
+     */
+    function kokuu_credit_source_labels(): array
     {
         return [
             'thread' => '发起主题',
             'reply'  => '回复帖子',
             'liked'  => '帖子被赞',
-            'manual' => '管理员手动', 'legacy' => '历史补录',
-        ][$source] ?? $source;
+            'manual' => '管理员手动',
+            'legacy' => '历史补录',
+        ];
+    }
+}
+
+if (! function_exists('kokuu_credit_source_label')) {
+    function kokuu_credit_source_label(string $source): string
+    {
+        return kokuu_credit_source_labels()[$source] ?? $source;
     }
 }
 
@@ -1171,11 +1185,8 @@ return function ($plugin) {
             return view()->file($plugin->getPath() . '/views/ledger.twig', [
                 'cfg' => $cfg,
                 'stats' => kokuu_credit_stats(),
-                'sourceLabels' => [
-                    'thread' => '发起主题', 'reply' => '回复帖子',
-                    'liked' => '帖子被赞', 'manual' => '管理员手动',
-                    'legacy' => '历史补录',
-                ],
+                // 同一份标签表，别再抄 —— 见 kokuu_credit_source_label() 的注释
+                'sourceLabels' => kokuu_credit_source_labels(),
             ]);
         })->middleware(['web']);
     });
