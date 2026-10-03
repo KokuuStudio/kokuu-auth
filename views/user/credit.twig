@@ -57,37 +57,26 @@
       </span>
       <span class="kcDash-sign-text">{{ data.sign.text }}</span>
     </div>
-
-    {#
-      「怎么加分 + 去哪」并进这张卡。
-      原本是右列一张独立的「社区互联」卡，但用户要的仪表盘只有两个东西
-      （积分 / 现有的社区），多一张卡就是第三个东西；
-      而右列是 kokuu-forum 的社区 feed，插进去还会被链式回调顶到
-      最底部看不见。所以直接放进积分卡底部，一屏说完。
-    #}
-    <div class="kcDash-rules">
-      <div class="kcDash-rule">
-        <span class="kcDash-rule-num">+{{ data.scoreThread }}</span>
-        <span class="kcDash-rule-label">发起主题</span>
-      </div>
-      <div class="kcDash-rule">
-        <span class="kcDash-rule-num">+{{ data.scoreReply }}</span>
-        <span class="kcDash-rule-label">回复帖子</span>
-      </div>
-    </div>
-
-    <a class="kcDash-cta" href="{{ data.forumUrl }}" target="_blank" rel="noopener">
-      前往论坛
-      <i class="fas fa-arrow-right"></i>
-    </a>
   </section>
 
   {#
-    这里**刻意不放**「最近变动」逐笔列表。
+    这里**刻意不放**的东西，用户都明确说过不要：
 
-    用户原话：「我不需要那么多社区互联和最近变动，当然这个可以保留
-    折叠到侧栏里」—— 逐笔明细该去的地方是侧栏那个「论坛积分流水」
-    （ConfigureUserMenu 注册的入口），仪表盘只负责「有多少」。
-    管理员想看逐笔记录，从右上角「流水」链接跳过去即可。
+    · 「+10 发起主题 / +2 回复帖子」加分规则
+      ——「用户的仪表盘积分页不需要那个发起主题的积分记录」。
+      加分规则属于**规则说明**，而积分卡是**状态展示**，
+      混在一起会让「有多少」这个核心信息被稀释。
+      真要说明规则，论坛侧或流水页更合适。
+
+    · 「前往论坛」CTA
+      ——「不需要那个前往论坛功能」。
+      社区 feed 卡片右上角本来就有一个「前往论坛」按钮（kokuu-forum 的
+      `kf-widget-btn-primary`），仪表盘再放一个是重复入口。
+      积分卡只回答一个问题：我有多少分、今天加了没。
+
+    · 「最近变动」逐笔列表
+      ——「我不需要那么多……最近变动，当然这个可以保留折叠到侧栏里」，
+      逐笔明细归侧栏那个「论坛积分流水」入口。
+      管理员想看逐笔记录，从右上角「流水」链接跳过去即可。
   #}
 </div>
