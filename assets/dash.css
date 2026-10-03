@@ -264,17 +264,19 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
  * 右列只有一张卡，左列有两张（积分 + 最近变动），
  * 所以右列天然比左列矮一截，底部会缺一块。
  * flex:1 让它吃掉列内剩余高度，两列底边对齐。
- * 移动端（<992px）两个 widget 各自100% 宽、各自成列，
- * 高度本来就由内容决定，flex:1 不会产生空洞，无需额外处理。
+ *
+ * ⚠️ 只在**后台**这样写。用户中心的右列下面还有 kokuu-forum 的
+ * 社区 feed（一长串帖子列表），那张卡 flex:1 会把互联卡拉成
+ * 跟整条 feed 一样高、里面大片空白。所以限定在 admin 页面。
  */
-.kcDash-card--interop {
+body.kokuu-apple .kcDash-card--interop {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
 }
 
-/* 让 CTA 始终贴在卡片底部，而不是跟着内容浮在中间 */
-.kcDash-card--interop .kcDash-cta { margin-top: auto; }
+/* 让 CTA 贴住卡片底部（同样只对后台那张生效） */
+body.kokuu-apple .kcDash-card--interop .kcDash-cta { margin-top: auto; }
 
 .kcDash-pill {
   display: inline-flex;
@@ -414,6 +416,55 @@ body .kcDash-col .kcDash-cta:hover {
 body .kcDash-col .kcDash-cta:active { transform: scale(.985); }
 
 /* =========================================================
+   变量兜底
+   ========================================================= */
+
+/*
+ * ⚠️⚠️ 必须有这一段，**不能**只依赖 kokuu-ui/apple.css。
+ *
+ * apple.css 的作用域是 `body.kokuu-apple.*`，而这个类是
+ * kokuu-ui 的 rebuild.js **在后台页面运行时**才加的。
+ * 实测普通用户中心 /user 的 body 上**没有** kokuu-apple
+ * （实测 class = "dark-mode sidebar-mini"），
+ * 所以那边 --a-* / --k-* 全部是未定义状态。
+ *
+ * 好在下面每处 var() 都带了 fallback（`var(--a-surface, #fff)`），
+ * 缺变量时会用兜底值，不会塌成透明或黑色。
+ * 但有几个值兜底不了（下面单独处理）：
+ *   · 深色模式背景 —— 页面底色得跟着变深，否则白卡片浮在黑底上很脏
+ *   · 分隔线颜色
+ */
+.kcDash-card {
+  /* 用户中心没有 --a-surface，兜底给白；后台由 apple.css 提供 */
+  background: var(--a-surface, #FFFFFF);
+}
+
+/* 用户中心的页面底色：AdminLTE 默认 body 是 #F4F6F9，接近但不等同于
+ * apple 的 #F2F2F7，直接用会有一圈色差。深色模式同理。 */
+body:not(.kokuu-apple) .content-wrapper {
+  background: var(--a-bg, #F2F2F7);
+}
+
+body:not(.kokuu-apple).dark-mode .content-wrapper {
+  background: var(--a-bg, #000000);
+}
+
+/* 无kokuu-apple 时分隔线要自己给一个可见值 */
+body:not(.kokuu-apple) .kcDash-card {
+  border-color: var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+body:not(.kokuu-apple).dark-mode .kcDash-card {
+  background: var(--a-surface, #1C1C1E);
+  border-color: var(--a-sep, rgba(84, 84, 88, .5));
+}
+
+body:not(.kokuu-apple).dark-mode .kcDash-metric,
+body:not(.kokuu-apple).dark-mode .kcDash-rule {
+  background: rgba(118, 118, 128, .16);
+}
+
+/* =========================================================
    响应式
    ========================================================= */
 
@@ -474,7 +525,12 @@ body .kcDash-col .kcDash-cta:active { transform: scale(.985); }
   .kcDash-sub { font-size: 12px; }
 }
 
-/* ---- 深色模式（苹果深色）---- */
+/* ---- 深色模式（苹果深色）----
+ *
+ * ⚠️ 这些选择器**故意不带** `body.kokuu-apple` 前缀：
+ *   后台和用户中心都要生效，而用户中心那个 body 上没有 kokuu-apple，
+ *   加了前缀用户侧深色模式就完全失效。
+ */
 body.dark-mode .kcDash-card {
   background: var(--a-surface, #1C1C1E);
   border-color: var(--a-sep, rgba(84, 84, 88, .5));
@@ -493,6 +549,16 @@ body.dark-mode .kcDash-sign.is-todo {
 body.dark-mode .kcDash-sign.is-done {
   background: rgba(48, 209, 88, .16);
   color: #65D97A;
+}
+
+body.dark-mode .kcDash-pill.is-on {
+  background: rgba(48, 209, 88, .16);
+  color: #65D97A;
+}
+
+body.dark-mode .kcDash-pill.is-off {
+  background: rgba(118, 118, 128, .2);
+  color: #AEAEB2;
 }
 
 body.dark-mode .kcDash-row-delta.is-plus { color: #65D97A; }

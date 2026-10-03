@@ -213,6 +213,105 @@ widgets: [[[dashboard.credit], [dashboard.interop]]]
 
 ---
 
+## 四、用户中心仪表盘
+
+后台接管了，普通用户那边原本还是老样子（深色卡片 + 荧光色块）。
+现在 `/user` 也走同一套Apple 扁平化。
+
+### 两个钩子，不是��个
+
+后台 `/admin` 和用户中心 `/user` 是**两套完全独立的 grid**，
+`AdminController::index()` 和 `UserController::index()`
+各调一次自己的 filter，钩子名也不同：
+
+| 页面 | 钩子 |
+|---|---|
+| 后台 `/admin` | `grid:admin.index` |
+| 用户中心 `/user` | `grid:user.index` |
+
+**只接后台，用户中心不会跟着变**——这是最容易漏的一步。
+`View::share` 的键也要分开用（`kcDash` / `kcDashUser`），
+因为 `View::share` 是全局的、不按页面隔离，共用一个键会互相覆盖。
+
+### 只能增量改 `$grid`，不能整个 return
+
+`grid:user.index` 上挂了**不止一个** Filter 回调：
+
+- 本插件（换掉 usage widget）
+- `kokuu-forum`（注入社区 feed `user.widgets.dashboard.forum`，并移除内核 announcement）
+
+多个回调是**链式**的：前一个的返回值作为后一个的输入。
+所以必须沿用内核原布局、只换掉左列的 widget：
+
+```php
+// 左列：移除 usage（角色数量/存储空间），插入积分卡
+$col = array_values(array_filter(
+    (array) $grid['widgets'][0][0],
+    fn ($w) => $w !== 'user.widgets.dashboard.usage'
+));
+array_unshift($col, 'KokuuStudio\\KokuuCredit::user.credit');
+$grid['widgets'][0][0] = $col;
+
+// 右列一个字都不动
+return $grid;
+```
+
+⚠️ 用 `array_filter` + `array_values` 压平：`grid.twig` 按下标 foreach，
+中间挖元素会留下不连续下标。
+
+### 用户中心只有两个东西
+
+需求原文：「普通用户登录之后，在用户中心的『仪表盘』只看两个东西，
+一个是这个积分，一个是现有的社区」。
+
+于是：
+
+| 位置 | 内容 |
+|---|---|
+| 左列 | 积分卡 `views/user/credit.twig`：余额、今日获得/笔数、签到条、加分规则、前往论坛 CTA |
+| 右列 | **kokuu-forum 的社区 feed**（原有插件，本插件不碰） |
+
+**「现有的社区」指的就是 kokuu-forum 那张 feed**，所以本插件
+**不再插自己的社区互联卡**，也**不放「最近变动」逐笔列表**——
+插进去就是第三个东西，而且因为回调链式、顺序不确定，
+还会被顶到长 feed 下面看不见（实测只在右下角露出一角）。
+逐笔明细该去的地方是侧栏那个「论坛积分流水」入口。
+
+---
+
+## 五、积分流水页
+
+`/plugin/kokuu-credit/ledger`，admin-only。
+
+### 重写动机
+
+用户反馈：「我并不需要那么复杂的记录，或者把这个积分流水的侧边栏折叠起来」。
+
+重写前是7 列表格：时间 / 用户 / 来源 / 变动 / **变动后余额** / **事件 ID** / **备注**。
+后三列是排查幂等问题用的，管理员一年用不到两次，普通用户完全无意义。
+
+### 现在的形态
+
+- **列表从表格换成卡片流**：7 列在 390px 必须横向滚动，
+  而积分变动天然是「一条一条的事」，纵向卡片不用滚动就能读完。
+- **主行只给三样**：图标 + 来源 + 时间 + 变动。
+- **技术信息收进每条记录自己的 `<details>`**（默认收起），
+  内含用户 / 变动后余额 / 事件 ID / 备注。
+  这就是「折叠起来」的落点——**不是折叠侧边栏**，
+  侧边栏是 AdminLTE 骨架，折叠它会影响所有页面。
+- **UID 筛选也收进 `<details>`**：它是管理员工具，不是浏览流水时的常用操作。
+
+视觉从「虚空深色」改成与仪表盘一致的 Apple 扁平化。
+
+⚠️ 后台配置页里那 10 行流水**仍然用表格渲染**
+（`renderTable()`，管理员核对到账用，信息密度优先），
+与流水页的 `renderRecords()` 并存。
+⚠️ 两边的**变动颜色 class 名故意不共用一个函数**：
+流水页 `.is-plus`（Apple 风无前缀）、配置页 `.kc-delta-plus`（虚空深色），
+配色体系不同，共用会让后台表格里的数字变成无色。
+
+---
+
 ## 踩过的坑
 
 ### 1. `Hook::addRoute` 里的闭包要`use ($plugin)`
@@ -388,6 +487,51 @@ chown -R www-data:www-data storage/framework/views
 自动化测试里别去点 `.dark-mode-toggle` / `[data-theme="dark"]`——
 那些选择器在这个站根本不存在，点了没反应还会误判成「深色模式坏了」。
 点完要读 `document.body.className` 确认 `dark-mode` 真的加上了。
+
+### 13. `plugin/` 前缀拿不到 kokuu-ui 的 apple 作用域
+
+`kokuu-ui/apple.css` 的规则全写成 `body.kokuu-apple xxx`，
+那个类是 `rebuild.js` 在运行时加到 body 上的。
+而 `rebuild.js` 只注入这六个前缀：
+
+```php
+['user', 'user/*', 'admin', 'admin/*', 'skinlib', 'skinlib/*']
+```
+
+**不含 `plugin/*`**。于是 `/plugin/kokuu-credit/ledger` 这类插件自有页面上：
+
+- body 没有 `kokuu-apple` 类 → apple.css 作用域规则一行都不生效
+- 页面退回内核紫渐变背景 + 虚空深色表格，和隔壁仪表盘完全不是一套东西
+
+症状很隐蔽：页面能正常渲染、零控制台错误，只是**配色不对**。
+
+解法（不改 `kokuu-ui`）：
+
+```php
+Hook::addStyleFileToPage('/plugins/kokuu-ui/assets/apple.css', ['plugin/kokuu-credit/*']);
+Hook::addScriptFileToPage($plugin->assets('apple-scope.js'), ['plugin/kokuu-credit/*']);
+```
+
+`apple-scope.js` 只干一件事——把 `kokuu-apple` 加到 body 上。
+
+⚠️ **不要**顺手把 `rebuild.js` 的行为也复制一份（侧栏折叠、进场动画）：
+两边都往同一个 `localStorage` key 写状态会打架，
+表现为折叠状态在两类页面之间互相覆盖。
+
+### 14. `grid` 的 `layout` 行数必须与 `widgets` 行数一致
+
+`shared/grid.twig` 是三层嵌套 `for row → for col → for widget`：
+
+```twig
+{% set layout = grid.layout[loop.index0] %}
+<div class="col-{{ layout[loop.index0] }}">
+```
+
+如果 `widgets` 给了两行而 `layout` 只给一行，
+第二行取 `grid.layout[1]` 就是 `undefined` →
+渲染成 `class="col-"`（**没有宽度**）→ 那一列内容掉到下面，左边留一大片空白。
+
+症状极具误导性：看起来像「布局没生效」，实际是数组下标越界。
 
 ---
 

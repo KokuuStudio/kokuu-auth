@@ -1,34 +1,82 @@
+{#
+  论坛积分流水（重写版）
+
+  用户原话：「我对并不需要那么复杂的记录，或者把这个积分流水的侧边栏折叠起来」
+
+  → 两个诉求合并处理：
+    1. **去掉技术字段**。变动后余额 / 事件 ID / 备注这三列是给
+       排查幂等问题用的，管理员一年也用不到两次，普通用户完全无意义。
+       默认视图只留「时间 / 来源 / 变动」。
+    2. **技术信息折叠**。剩下的余额、事件 ID、备注、所属用户
+       放进每条记录自己的 `<details>` 里，默认收起——
+       这就是「折叠起来」的落点，而不是折叠整个侧边栏
+       （侧边栏是 AdminLTE 骨架，折叠它会影响所有页面）。
+
+  另外把表格换成了卡片流：7 列表格在 390px 移动端必须横向滚动，
+  而积分变动本身就是「一条一条的事」，纵向卡片天然可读。
+
+  数据由 bootstrap.php 的路由用
+  View::share('ledgerStats'|'sourceLabels', ...) 挂进来；
+  列表本身走 /plugin/kokuu-credit/api/ledger 异步拉。
+#}
 {% extends 'user.base.twig' %}
 
 {% block content %}
-<div class="container">
-  <h2>论坛积分流水</h2>
-  <p class="help-text">
-    论坛（chat.kokuu.org）产生的加分事件会在这里留下记录。
-    全站只有 <code>users.score</code> 一个余额字段，扣分场景仍走皮肤站内核逻辑。
-  </p>
+<div class="container kcPage">
+  {# ---- 页头 ---- #}
+  <header class="kcPage-head">
+    <div>
+      <h2 class="kcPage-title">
+        <i class="fas fa-coins"></i>
+        论坛积分流水
+      </h2>
+      <p class="kcPage-sub">
+        论坛产生的加分记录。全站只有一个余额字段，
+        在论坛消费积分请回皮肤站。
+      </p>
+    </div>
+    <button id="kc-refresh" class="kcPage-btn" type="button">
+      <i class="fas fa-rotate"></i>
+      刷新
+    </button>
+  </header>
 
-  <div class="kc-stats">
-    <div class="kc-stat">
-      <div class="kc-stat-num" id="kc-stat-total">{{ stats.total }}</div>
-      <div class="kc-stat-label">累计笔数</div>
+  {# ---- 三个概览数字 ---- #}
+  <div class="kcPage-stats">
+    <div class="kcPage-stat">
+      <span class="kcPage-stat-num" id="kc-stat-total">{{ stats.total }}</span>
+      <span class="kcPage-stat-label">累计笔数</span>
     </div>
-    <div class="kc-stat">
-      <div class="kc-stat-num" id="kc-stat-today">{{ stats.today }}</div>
-      <div class="kc-stat-label">今日发放</div>
+    <div class="kcPage-stat">
+      <span class="kcPage-stat-num" id="kc-stat-today">{{ stats.today }}</span>
+      <span class="kcPage-stat-label">今日发放</span>
     </div>
-    <div class="kc-stat">
-      <div class="kc-stat-num" id="kc-stat-events">{{ stats.events }}</div>
-      <div class="kc-stat-label">今日事件</div>
+    <div class="kcPage-stat">
+      <span class="kcPage-stat-num" id="kc-stat-events">{{ stats.events }}</span>
+      <span class="kcPage-stat-label">今日事件</span>
     </div>
   </div>
 
-  <div class="kc-toolbar">
-    <label for="kc-uid">按 UID 筛选</label>
-    <input type="number" id="kc-uid" min="1" placeholder="留空看全部">
-    <button id="kc-refresh" class="Button Button--primary">刷新</button>
-  </div>
+  {#
+    UID 筛选也收进折叠区。
+    它是管理员工具（排查某个用户的加分），不是浏览流水时的常用操作，
+    默认展开反而抢注意力。
+  #}
+  <details class="kcPage-tools">
+    <summary class="kcPage-tools-sum">
+      <i class="fas fa-sliders"></i>
+      按用户筛选
+    </summary>
+    <div class="kcPage-tools-body">
+      <label class="kcPage-label" for="kc-uid">皮肤站 UID</label>
+      <input class="kcPage-input" type="number" id="kc-uid" min="1" placeholder="留空看全部用户">
+      <button class="kcPage-btn kcPage-btn--go" id="kc-uid-go" type="button">筛选</button>
+    </div>
+  </details>
 
-  <div id="kc-list" data-url="{{ url('/plugin/kokuu-credit/api/ledger') }}"><div class="kc-empty">加载中…</div></div>
+  {# ---- 列表 ---- #}
+  <div id="kc-list" data-url="{{ url('/plugin/kokuu-credit/api/ledger') }}">
+    <div class="kcPage-empty">加载中…</div>
+  </div>
 </div>
 {% endblock %}

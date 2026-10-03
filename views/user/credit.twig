@@ -1,0 +1,93 @@
+{#
+  用户中心 · 积分容器
+
+  与后台的 dashboard/credit.twig **结构一致但内容不同**——
+  普通用户看不到「管理员视角」的东西，也不需要那么长的列表。
+
+  数据由 bootstrap.php 的 grid:user.index 钩子用
+  View::share('kcDashUser', ...) 算好后挂进来。
+
+  ⚠️ share 键是 kcDashUser，**不是**后台那个 kcDash。
+     View::share 是全局的、不按页面隔离，共用一个键会互相覆盖。
+
+  ⚠️ 绝不要在 twig 里调 `{{ kokuu_credit_dashboard_data(...) }}`：
+     Twig 沙箱不放行自定义 PHP 函数，会报
+     Unknown "kokuu_credit_dashboard_data" function。
+  ⚠️ 当前登录用户用 `auth_user()`，**不是** `auth()`（内核没注册后者）。
+#}
+{% set data = kcDashUser %}
+
+<div class="kcDash-col">
+  <section class="kcDash-card kcDash-card--score">
+    <header class="kcDash-head">
+      <span class="kcDash-eyebrow">
+        <i class="fas fa-coins"></i>
+        我的积分
+      </span>
+      {# 普通用户不该被导向管理员专属的流水页（那边会 403） #}
+      {% if auth_user().admin %}
+        <a class="kcDash-link" href="{{ url('plugin/kokuu-credit/ledger') }}">
+          流水
+          <i class="fas fa-chevron-right"></i>
+        </a>
+      {% endif %}
+    </header>
+
+    <div class="kcDash-balance">
+      <span class="kcDash-balance-num">{{ data.score }}</span>
+      <span class="kcDash-balance-unit">积分</span>
+    </div>
+
+    <p class="kcDash-sub">在论坛发帖、回复即可获得积分</p>
+
+    <div class="kcDash-metrics">
+      <div class="kcDash-metric">
+        <span class="kcDash-metric-num">+{{ data.todayEarned }}</span>
+        <span class="kcDash-metric-label">今日获得</span>
+      </div>
+      <div class="kcDash-metric">
+        <span class="kcDash-metric-num">{{ data.todayEvents }}</span>
+        <span class="kcDash-metric-label">今日笔数</span>
+      </div>
+    </div>
+
+    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}">
+      <span class="kcDash-sign-icon">
+        <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+      </span>
+      <span class="kcDash-sign-text">{{ data.sign.text }}</span>
+    </div>
+
+    {#
+      「怎么加分 + 去哪」并进这张卡。
+      原本是右列一张独立的「社区互联」卡，但用户要的仪表盘只有两个东西
+      （积分 / 现有的社区），多一张卡就是第三个东西；
+      而右列是 kokuu-forum 的社区 feed，插进去还会被链式回调顶到
+      最底部看不见。所以直接放进积分卡底部，一屏说完。
+    #}
+    <div class="kcDash-rules">
+      <div class="kcDash-rule">
+        <span class="kcDash-rule-num">+{{ data.scoreThread }}</span>
+        <span class="kcDash-rule-label">发起主题</span>
+      </div>
+      <div class="kcDash-rule">
+        <span class="kcDash-rule-num">+{{ data.scoreReply }}</span>
+        <span class="kcDash-rule-label">回复帖子</span>
+      </div>
+    </div>
+
+    <a class="kcDash-cta" href="{{ data.forumUrl }}" target="_blank" rel="noopener">
+      前往论坛
+      <i class="fas fa-arrow-right"></i>
+    </a>
+  </section>
+
+  {#
+    这里**刻意不放**「最近变动」逐笔列表。
+
+    用户原话：「我不需要那么多社区互联和最近变动，当然这个可以保留
+    折叠到侧栏里」—— 逐笔明细该去的地方是侧栏那个「论坛积分流水」
+    （ConfigureUserMenu 注册的入口），仪表盘只负责「有多少」。
+    管理员想看逐笔记录，从右上角「流水」链接跳过去即可。
+  #}
+</div>

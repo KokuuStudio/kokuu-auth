@@ -195,7 +195,11 @@
   if (listEl) {
     var refreshBtn = document.getElementById('kc-refresh');
     if (refreshBtn) refreshBtn.addEventListener('click', loadLedger);
+
+    // 筛选：按钮 + 回车两种触发方式
     var uidEl = document.getElementById('kc-uid');
+    var uidGo = document.getElementById('kc-uid-go');
+    if (uidGo) uidGo.addEventListener('click', loadLedger);
     if (uidEl) {
       uidEl.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') loadLedger();
@@ -212,18 +216,18 @@
     var url = base + '?limit=50';
     if (uid) url += '&uid=' + encodeURIComponent(uid);
 
-    el.innerHTML = '<div class="kc-empty">加载中…</div>';
+    el.innerHTML = '<div class="kcPage-empty">加载中…</div>';
     fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        el.innerHTML = renderTable(d.items || []);
+        el.innerHTML = renderRecords(d.items || []);
         if (d.stats) {
           setText('kc-stat-total', d.stats.total);
           setText('kc-stat-today', d.stats.today);
           setText('kc-stat-events', d.stats.events);
         }
       })
-      .catch(function () { el.innerHTML = '<div class="kc-empty">加载失败，请检查网络或权限</div>'; });
+      .catch(function () { el.innerHTML = '<div class="kcPage-empty">加载失败，请检查网络或权限</div>'; });
   }
 
   function setText(id, v) {
@@ -237,14 +241,107 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  /*
+   * ⚠️ 变动颜色的 class 名**分两套**，别图省事共用一个函数：
+   *   · 流水页卡片 → .is-plus / .is-minus / .is-zero（Apple 风，无前缀）
+   *   · 后台配置页表格 → .kc-delta-plus / .kc-delta-minus / .kc-delta-zero（虚空深色）
+   * 两边 CSS 变量与配色体系完全不同，共用一个函数会导致
+   * 后台表格里的数字变成无色。
+   */
   function deltaClass(n) {
     return n > 0 ? 'kc-delta-plus' : (n < 0 ? 'kc-delta-minus' : 'kc-delta-zero');
+  }
+
+  function recDeltaClass(n) {
+    return n > 0 ? 'is-plus' : (n < 0 ? 'is-minus' : 'is-zero');
   }
 
   function deltaText(n) {
     return n > 0 ? '+' + n : String(n);
   }
 
+  /*
+   * 每种来源配一个图标，让卡片扫起来有区分度。
+   * ⚠️ 图标名必须落在项目已引入的 Font Awesome 版本里，
+   *    写不存在的名字会渲染成一个空方块。
+   */
+  var SOURCE_ICONS = {
+    thread: 'fa-comment-dots',
+    reply: 'fa-reply',
+    liked: 'fa-heart',
+    manual: 'fa-sliders-h',
+    legacy: 'fa-clock'
+  };
+
+  function sourceIcon(src) {
+    return SOURCE_ICONS[src] || 'fa-coins';
+  }
+
+  /*
+   * 流水列表渲染。
+   *
+   * 重写前的版本是一张 7 列表格（时间/用户/来源/变动/变动后余额/
+   * 事件 ID/备注），用户反馈「不需要那么复杂的记录」。
+   * 现在：主行只给「图标 + 来源 + 时间 + 变动」，
+   * 其余（用户 / 余额 / 事件 ID / 备注）收进每条记录自己的
+   * <details>，默认收起。
+   *
+   * 另一个改动是**从表格换成卡片**：
+   * 7 列在 390px 移动端必须横向滚动，而积分变动天然是
+   * 一条一条的事，纵向卡片不用滚动就能读完。
+   */
+  function renderRecords(items) {
+    if (!items.length) {
+      return '<div class="kcPage-empty">还没有任何积分流水</div>';
+    }
+
+    return items.map(function (it) {
+      var src = it.source || '';
+
+      var facts = [];
+      if (it.nickname) {
+        facts.push(['用户', esc(it.nickname) + (it.uid ? ' <span class="kcRec-uid">uid ' + esc(it.uid) + '</span>' : '')]);
+      }
+      if (it.balance_after !== undefined && it.balance_after !== null) {
+        facts.push(['变动后余额', esc(it.balance_after)]);
+      }
+      if (it.event_id) {
+        facts.push(['事件 ID', '<code class="kcRec-code">' + esc(it.event_id) + '</code>']);
+      }
+      if (it.note) {
+        facts.push(['备注', esc(it.note)]);
+      }
+
+      var more = facts.length
+        ? '<details class="kcRec-more">' +
+            '<summary>技术详情</summary>' +
+            '<dl class="kcRec-facts">' +
+            facts.map(function (f) {
+              return '<dt>' + f[0] + '</dt><dd>' + f[1] + '</dd>';
+            }).join('') +
+            '</dl>' +
+          '</details>'
+        : '';
+
+      return '<article class="kcRec kcRec--' + esc(src) + '">' +
+        '<div class="kcRec-main">' +
+          '<span class="kcRec-ico"><i class="fas ' + sourceIcon(src) + '"></i></span>' +
+          '<span class="kcRec-body">' +
+            '<span class="kcRec-label">' + esc(it.source_label || src) + '</span>' +
+            '<span class="kcRec-time">' + esc(it.created_at) + '</span>' +
+          '</span>' +
+          '<span class="kcRec-delta ' + recDeltaClass(it.delta) + '">' + deltaText(it.delta) + '</span>' +
+        '</div>' +
+        more +
+      '</article>';
+    }).join('');
+  }
+
+  /*
+   * 后台配置页里那 10 行流水仍然用**表格**渲染
+   * （那边是管理员核对到账用，信息密度优先）。
+   * 与流水页的卡片渲染并存，各自服务自己的场景。
+   */
   function renderTable(items) {
     if (!items.length) {
       return '<div class="kc-empty">还没有任何积分流水</div>';

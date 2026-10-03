@@ -954,16 +954,49 @@ return function ($plugin) {
     /*
      * 仪表盘专用样式。
      *
-     * 单独一个文件而不是并进 credit.css：仪表盘的 apple 风格样式
-     * 有 400 多行（含响应式与深色模式），而 credit.css 还要服务
-     * 流水页/配置页，混在一起两边都不好维护。
+     * 单独一个文件而不是并进 credit.css：这套 apple 风格样式
+     * 有 500 多行（含响应式与深色模式），而 credit.css 还要服务
+     * 配置页，混在一起两边都不好维护。
      *
      * ⚠️ `admin` 这一项是**精确匹配 /admin 本身**，
      *   `admin/*` 才能覆盖 /admin/users 这类子页面，
      *   两个都要写 —— 仪表盘正好是前者。
+     *
+     * ⚠️ `user` 同理：精确匹配 /user 本身（就是用户中心仪表盘），
+     *   `user/*` 覆盖 /user/profile 等子页。
+     *   **不能漏掉 user 侧**——用户中心和后台仪表盘是两套独立 widget，
+     *   后台接管了不代表用户中心也跟着变。
      */
     Hook::addStyleFileToPage($plugin->assets('dash.css'), [
         'admin', 'admin/*',
+        'user', 'user/*',
+    ]);
+
+    /*
+     * ---- 流水页补 apple 作用域 ----
+     *
+     * 流水页 URL 是 `plugin/kokuu-credit/ledger`，而 kokuu-ui 的
+     * rebuild.js 只注入 `user` / `user/*` / `admin` / `admin/*` /
+     * `skinlib` / `skinlib/*` 六个前缀 —— **不含 plugin/**。
+     *
+     * 后果（实测）：流水页 body 上没有 `kokuu-apple` 类，
+     * apple.css 里 `body.kokuu-apple xxx` 的作用域规则全部不生效，
+     * 页面退回内核默认的紫渐变背景 + 虚空深色表格，
+     * 和隔壁仪表盘的 Apple 扁平化完全不是一套东西。
+     *
+     * → 这里引用 kokuu-ui 的 apple.css（**不改 kokuu-ui 本身**），
+     *   再用一小段脚本把 `kokuu-apple` 打到 body 上。
+     *
+     * ⚠️ 只加类名，不复制 rebuild.js 的任何行为（侧栏折叠、
+     *   stagger 动画那些）—— 那些是 kokuu-ui 的职责，
+     *   复制一份会两边状态打架（都往 localStorage 写同一个 key）。
+     */
+    Hook::addStyleFileToPage('/plugins/kokuu-ui/assets/apple.css', [
+        'plugin/kokuu-credit/*',
+    ]);
+
+    Hook::addScriptFileToPage($plugin->assets('apple-scope.js'), [
+        'plugin/kokuu-credit/*',
     ]);
 
     /*
@@ -1227,6 +1260,81 @@ return function ($plugin) {
                 ],
             ],
         ];
+    });
+
+    /*
+     * ---- 用户中心仪表盘接管 ----
+     *
+     * 为什么必须单独注册一次：后台 `/admin` 和用户中心 `/user` 是
+     * **两套完全独立的 grid**（AdminController::index 与 UserController::index
+     * 各调一次自己的 filter），钩子名也不同：
+     *   后台  → grid:admin.index
+     *   用户  → grid:user.index
+     * 只接后台的话，用户中心仍是老样子（深色卡片 + 荧光色块），
+     * 表现为「管理面板有新UI，普通用户那边没有」。
+     *
+     * ⚠️ kokuu-ui/apple.css 的作用域是 `body.kokuu-apple.*`，
+     *   而这个类是 rebuild.js 在**后台页面**才加的
+     *   （实测 /user 的 body 上没有 kokuu-apple），
+     *   所以用户中心这边apple 变量要自己兜底，
+     *   dash.css 里所有 var() 都带了fallback 值，正是为此。
+     *
+     * ⚠️ 邮箱验证 widget 不能丢：SSO 账号虽然建号时就 confirmed=1，
+     *   但老账号可能有漏网的，留着内核自带的提醒更稳妥。
+     *   它放在左列积分卡**上方**，只占一行、不抢版面。
+     */
+    app(\Blessing\Filter::class)->add('grid:user.index', function ($grid) {
+        // ⚠️ share 键名用 kcDashUser 而不是复用 kcDash：
+        //   两个钩子可能先后作用于同一个请求，
+        //   共用一个键会互相覆盖。View::share 是全局的，不隔离。
+        View::share('kcDashUser', kokuu_credit_dashboard_data(auth()->user()));
+
+        /*
+         * ⚠️⚠️⚠️ 必须**在传入的 $grid 上增量改**，不要整个 return 一个新数组。
+         *
+         * 原因：`grid:user.index` 上挂了**不止一个** Filter 回调 ——
+         *   · 本插件（接管布局）
+         *   · kokuu-forum（注入社区卡 user.widgets.dashboard.forum，
+         *     并移除内核的 announcement）
+         * 多个回调是**链式**的：前一个的返回值作为后一个的输入。
+         *
+         * 我第一版直接 return 了一个全新数组，结果把 kokuu-forum
+         * 后续要用的上下文整个换掉了 —— 社区卡被塞到别的列、
+         * 左边还留一大片空白（`class="col-"`，因为 layout 只有一行
+         * 而 widgets 给了两行，grid.twig 取 layout[1] 越界）。
+         *
+         * → 正确做法：沿用内核原布局，只**换掉**左列的 usage widget
+         *   （角色数量/存储空间）成我们的积分卡，右列原样留给
+         *   kokuu-forum 的社区卡。这样两个插件互不干扰。
+         */
+        if (! isset($grid['widgets'][0][0]) || ! is_array($grid['widgets'][0][0])) {
+            $grid['widgets'][0][0] = [];
+        }
+
+        // 左列：邮箱验证保留，usage 换成积分卡。
+        // 用 array_filter + array_values 压平——
+        // grid.twig 按下标 foreach，中间挖元素会留下不连续下标。
+        $col = array_values(array_filter(
+            (array) $grid['widgets'][0][0],
+            fn ($w) => $w !== 'user.widgets.dashboard.usage'
+        ));
+        array_unshift($col, 'KokuuStudio\\KokuuCredit::user.credit');
+        $grid['widgets'][0][0] = $col;
+
+        /*
+         * ⚠️ 右列**一个字都不动**。
+         *
+         * 曾经在这里插一张自己的「社区互联」卡，结果是纯多余：
+         * 用户明确说过「用户中心的仪表盘只看两个东西，一个是这个积分，
+         * 一个是现有的社区」——「现有的社区」指的就是 kokuu-forum
+         * 那张社区 feed，再加一张互联卡就是第三个东西，
+         * 而且因为回调是链式的、顺序不确定，它会被顶到 feed 下面
+         * （实测截图里只在右下角露出一角），纯粹占位。
+         *
+         * 互联该有的信息（怎么加分、论坛在哪）已经并进左列积分卡底部，
+         * 见 views/user/credit.twig。
+         */
+        return $grid;
     });
 };
 
