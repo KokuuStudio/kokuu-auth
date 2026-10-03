@@ -986,7 +986,14 @@ return function ($plugin) {
 
     // ---- 流水页面 ----
     Hook::addRoute(function ($router) use ($plugin) {
-        $router->get('plugin/kokuu-credit/ledger', function (\Illuminate\Http\Request $request) {
+        // ⚠️ 内层闭包**必须**再写一次 use ($plugin)。
+        //   外层的 use ($plugin) 只让 $plugin 对**外层闭包**可见，
+        //   内层 function () {} 是另一个作用域，看不到外层的 use 变量。
+        //   漏掉时的表现是 500：
+        //     Undefined variable $plugin at bootstrap.php:996
+        //   （PHP 只在真正执行到这一行时才抛，所以路由注册阶段完全正常，
+        //     只有管理员点进流水页才炸 —— 很容易误判成视图模板问题。）
+        $router->get('plugin/kokuu-credit/ledger', function (\Illuminate\Http\Request $request) use ($plugin) {
             $user = $request->user();
             abort_if (! $user || $user->permission < User::ADMIN, 403);
 
