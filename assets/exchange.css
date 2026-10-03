@@ -1,8 +1,22 @@
 /* kokuu-exchange · 积分兑换
  *
  * 作用域一律用 .ex- 前缀，不与内核/kokuu-ui 的类名冲突。
- * 暗色模式靠 body.dark-mode（内核 base.twig 真实输出的 class），
- * **不要写 body.kokuu-apple** —— 那个类从未被任何 PHP 添加过。
+ *
+ * ── 配色来源（2026-10-03 修正）────────────────────────────────
+ * ⚠️ 旧注释写的是「**不要写 body.kokuu-apple —— 那个类从未被任何 PHP
+ *    添加过**」。这个前提是**错的**，害得整页配色只能硬编码。
+ *    真相：`kokuu-apple` 确实存在 —— rebuild.js 会打上，但它的注入范围
+ *    只有 user/admin/skinlib；后来 kokuu-ui 补了 apple-scope.js 覆盖
+ *    plugin/*，所以本文件所在的 plugin/kokuu-exchange 页面**现在有**这个类。
+ *    （修复前实测：body class 只有 `sidebar-mini`，顶栏 rgb(43,31,82)、
+ *      侧栏紫渐变 —— 就是缺这个类。）
+ *
+ * → 颜色一律走 apple.css 的 `--a-*` 变量，跟着主题走，别再硬编码。
+ *   硬编码的紫蓝渐变（#5b3fd6→#2f6fd0）与 Apple 扁平风格本身就不搭，
+ *   换主题时也永远不会跟着变。
+ *
+ * 暗色模式仍用 body.dark-mode（内核 base.twig 真实输出的 class），
+ * 但**浅色**部分交给 --a-*，只对「深色下需要额外压暗」的场景补 dark-mode。
  *
  * ── 对比度（WCAG AA，由 ops/exchange_check.js 实测守住）────────────
  * 正文需 ≥4.5:1，大字（≥24px 或 ≥18.66px/700）≥3:1。
@@ -12,37 +26,41 @@
  *      去掉 opacity，改用略暗的实色
  *   3) .ex-empty #97a1b2 on 白 = 2.61:1（表格空态几乎看不见）→ 压深
  *   4) .ex-time / .ex-stat-label #8a94a6 on 白 = 3.1:1 → 一并压深
- * 改任何颜色后必须重跑 node ops/exchange_check.js 看 LOW 行。
+ * ⚠️ 用 --a-text-2 / --a-text-3 替代后，对比度取决于 apple.css 的取值，
+ *    改 apple.css 会连带影响本页 —— 改完必须重跑 node ops/exchange_check.js。
  */
 
-/* 深一档的渐变：白字压在两端都 ≥4.5:1。
-   （原来的 #7c5cff/#4f9dff 在 #4f9dff 那头只有 4.35:1） */
+/* Hero：Apple 风格用「淡色面 + 深字」而不是高饱和紫渐变。
+   白字压深紫是为了在旧渐变上凑 AA，换成浅底后对比度问题自动消失。 */
 .ex-hero {
-  background: linear-gradient(135deg, #5b3fd6 0%, #2f6fd0 100%);
-  border-radius: 14px;
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.08));
+  border-radius: var(--a-radius-lg, 16px);
   padding: 22px 20px;
-  color: #fff;
+  color: var(--a-text, #1c1c1e);
   text-align: center;
   margin-bottom: 18px;
-  box-shadow: 0 10px 28px -14px rgba(63, 48, 168, 0.7);
+  box-shadow: var(--a-shadow, 0 1px 2px rgba(0, 0, 0, 0.04));
 }
 .ex-hero-num { font-size: 40px; font-weight: 700; line-height: 1.1; }
 /* ⚠️ 不要用 opacity 压次要文字 —— 那等于降低对比度，
    暗色模式下更会叠加成「灰上加灰」。要压就压实色。 */
-.ex-hero-label { color: #e6e2ff; font-size: 13px; margin-bottom: 6px; }
-.ex-hero-rate { color: #dcd9f7; font-size: 12px; }
+.ex-hero-label { color: var(--a-text-2, #626c7e); font-size: 13px; margin-bottom: 6px; }
+.ex-hero-rate { color: var(--a-text-3, #8a94a6); font-size: 12px; }
 .ex-dot { margin: 0 6px; }
 
 .ex-card {
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 12px;
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.07));
+  border-radius: var(--a-radius, 12px);
   padding: 18px;
   margin-bottom: 20px;
+  box-shadow: var(--a-shadow, none);
 }
+/* 深色下 --a-surface 已是半透明白，补一点边框让卡片边界更清楚 */
 body.dark-mode .ex-card {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.09);
+  background: var(--a-surface, rgba(255, 255, 255, 0.04));
+  border-color: var(--a-sep-strong, rgba(255, 255, 255, 0.09));
 }
 
 .ex-label {
@@ -50,6 +68,7 @@ body.dark-mode .ex-card {
   font-weight: 600;
   font-size: 13px;
   margin: 14px 0 6px;
+  color: var(--a-text, #1c1c1e);
 }
 .ex-label:first-child { margin-top: 0; }
 
@@ -59,45 +78,43 @@ body.dark-mode .ex-card {
 .ex-quick-btn {
   min-width: 38px;
   padding: 6px 8px;
-  border: 1px solid #cfd6e4;
-  background: #f6f8fc;
-  border-radius: 8px;
+  border: 1px solid var(--a-sep-strong, #cfd6e4);
+  background: var(--a-surface-2, #f6f8fc);
+  border-radius: var(--a-radius-sm, 8px);
   cursor: pointer;
   font-size: 13px;
-  color: #33415c;
+  color: var(--a-text, #33415c);
 }
-.ex-quick-btn:hover { background: #eaeffb; }
-body.dark-mode .ex-quick-btn {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.14);
-  color: #d6dbe6;
-}
+.ex-quick-btn:hover { background: var(--a-surface-2, #eaeffb); }
 
 .ex-preview {
   margin: 12px 0 4px;
   padding: 10px 12px;
-  background: #f2f6ff;
-  border-radius: 9px;
+  background: var(--a-surface-2, #f2f6ff);
+  border-radius: var(--a-radius-sm, 9px);
   font-size: 13px;
-  color: #33415c;
+  color: var(--a-text, #33415c);
 }
-body.dark-mode .ex-preview { background: rgba(124, 92, 255, 0.12); color: #cfd6e6; }
 .ex-preview.is-bad { background: #ffecec; color: #b02a2a; }
 body.dark-mode .ex-preview.is-bad { background: rgba(220, 60, 60, 0.16); color: #ffb4b4; }
 
+/* ⚠️ 白字不能直接压 var(--k-rain)：#0FA3A3 上白字只有 3.09:1（AA 需 4.5）。
+   这里是页面最重要的操作按钮，用 color-mix 往黑压一档取同色相深色
+   （≈#0A7A7A，5.15:1），既守住对比度又跟主题色相一致。
+   浏览器不支持 color-mix 时回落到下面那个已验证的实色。 */
 .ex-submit {
   margin-top: 14px;
   width: 100%;
   padding: 11px;
   font-size: 15px;
-  border-radius: 10px;
+  border-radius: var(--a-radius, 10px);
   border: 0;
   cursor: pointer;
   color: #fff;
-  /* 与 .ex-hero 同一套深色渐变：白字对比度 ≥4.5:1。
-     这是全页最重要的操作按钮，不能只卡在 4.35:1。 */
-  background: linear-gradient(135deg, #5b3fd6, #2f6fd0);
+  background: #0A7A7A;
+  background: color-mix(in srgb, var(--k-rain, #0FA3A3) 74%, #000 26%);
 }
+.ex-submit:hover { filter: brightness(1.08); }
 .ex-submit:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .ex-msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
@@ -106,33 +123,37 @@ body.dark-mode .ex-preview.is-bad { background: rgba(220, 60, 60, 0.16); color: 
 body.dark-mode .ex-msg.is-ok { color: #6ee7a8; }
 body.dark-mode .ex-msg.is-err { color: #ff9d9d; }
 
-.ex-h3 { margin: 24px 0 10px; font-size: 16px; font-weight: 600; }
+.ex-h3 {
+  margin: 24px 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--a-text, #1c1c1e);
+}
 
 .ex-table-wrap {
   overflow-x: auto;
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 12px;
-}
-body.dark-mode .ex-table-wrap {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.09);
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.07));
+  border-radius: var(--a-radius, 12px);
 }
 .ex-table { margin: 0; width: 100%; border-collapse: collapse; font-size: 13px; }
 .ex-table th, .ex-table td {
   padding: 9px 10px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--a-sep, rgba(0, 0, 0, 0.06));
   white-space: nowrap;
+  color: var(--a-text, #1c1c1e);
 }
-body.dark-mode .ex-table th,
-body.dark-mode .ex-table td { border-bottom-color: rgba(255, 255, 255, 0.07); }
-.ex-table th { font-weight: 600; color: #4d5768; font-size: 12px; }
-body.dark-mode .ex-table th { color: #b9c2d4; }
+.ex-table th {
+  font-weight: 600;
+  color: var(--a-text-2, #4d5768);
+  font-size: 12px;
+  background: var(--a-surface-2, rgba(0, 0, 0, 0.02));
+}
 .ex-num { text-align: right; }
-/* #8a94a6 on 白 = 3.1:1，压深到 4.6:1 */
-.ex-time { color: #626c7e; font-size: 12px; }
-/* #97a1b2 on 白 = 2.61:1 —— 空态提示几乎看不见，压深 */
-.ex-empty { text-align: center; color: #5d6675; padding: 22px 0; }
+/* 次要文字走 --a-text-2（旧版 #626c7e on 白 = 4.6:1） */
+.ex-time { color: var(--a-text-2, #626c7e); font-size: 12px; }
+/* 空态提示旧版 #97a1b2 只有 2.61:1，几乎看不见 → 提到 --a-text-2 */
+.ex-empty { text-align: center; color: var(--a-text-2, #5d6675); padding: 22px 0; }
 
 .ex-badge {
   display: inline-block;
@@ -144,11 +165,11 @@ body.dark-mode .ex-table th { color: #b9c2d4; }
 .ex-badge-pending  { background: #fff3d6; color: #a06b00; }
 .ex-badge-done     { background: #ddf5e6; color: #1a7f4b; }
 .ex-badge-failed   { background: #ffe0e0; color: #b02a2a; }
-.ex-badge-refunded { background: #eceff4; color: #5b6577; }
+.ex-badge-refunded { background: var(--a-surface-2, #eceff4); color: var(--a-text-2, #5b6577); }
 body.dark-mode .ex-badge-pending  { background: rgba(255, 200, 60, 0.16);  color: #ffdc8a; }
 body.dark-mode .ex-badge-done     { background: rgba(60, 200, 120, 0.16);  color: #86e5b4; }
 body.dark-mode .ex-badge-failed   { background: rgba(255, 90, 90, 0.18);   color: #ff9d9d; }
-body.dark-mode .ex-badge-refunded { background: rgba(255, 255, 255, 0.08); color: #b3bccc; }
+body.dark-mode .ex-badge-refunded { background: rgba(255, 255, 255, 0.08); color: var(--a-text-2, #b3bccc); }
 
 .ex-reason { font-size: 11px; color: #b02a2a; max-width: 220px; white-space: normal; margin-top: 3px; }
 
@@ -159,20 +180,14 @@ body.dark-mode .ex-badge-refunded { background: rgba(255, 255, 255, 0.08); color
   margin-bottom: 8px;
 }
 .ex-stat {
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 11px;
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(0, 0, 0, 0.07));
+  border-radius: var(--a-radius, 11px);
   padding: 13px 10px;
   text-align: center;
 }
-body.dark-mode .ex-stat {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.09);
-}
-.ex-stat-num { font-size: 22px; font-weight: 700; color: #3a51bd; }
-.ex-stat-label { font-size: 11px; color: #626c7e; margin-top: 2px; }
-body.dark-mode .ex-stat-num { color: #a8bcff; }
-body.dark-mode .ex-stat-label { color: #a9b3c6; }
+.ex-stat-num { font-size: 22px; font-weight: 700; color: var(--k-rain, #0FA3A3); }
+.ex-stat-label { font-size: 11px; color: var(--a-text-2, #626c7e); margin-top: 2px; }
 
 .ex-form-grid {
   display: grid;
