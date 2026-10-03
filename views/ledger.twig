@@ -1,0 +1,34 @@
+{% extends 'user.base.twig' %}
+
+{% block content %}
+<div class="container">
+  <h2>论坛积分流水</h2>
+  <p class="help-text">
+    论坛（chat.kokuu.org）产生的加分事件会在这里留下记录。
+    全站只有 <code>users.score</code> 一个余额字段，扣分场景仍走皮肤站内核逻辑。
+  </p>
+
+  <div class="kc-stats">
+    <div class="kc-stat">
+      <div class="kc-stat-num" id="kc-stat-total">{{ stats.total }}</div>
+      <div class="kc-stat-label">累计笔数</div>
+    </div>
+    <div class="kc-stat">
+      <div class="kc-stat-num" id="kc-stat-today">{{ stats.today }}</div>
+      <div class="kc-stat-label">今日发放</div>
+    </div>
+    <div class="kc-stat">
+      <div class="kc-stat-num" id="kc-stat-events">{{ stats.events }}</div>
+      <div class="kc-stat-label">今日事件</div>
+    </div>
+  </div>
+
+  <div class="kc-toolbar">
+    <label for="kc-uid">按 UID 筛选</label>
+    <input type="number" id="kc-uid" min="1" placeholder="留空看全部">
+    <button id="kc-refresh" class="Button Button--primary">刷新</button>
+  </div>
+
+  <div id="kc-list" data-url="{{ url('/plugin/kokuu-credit/api/ledger') }}"><div class="kc-empty">加载中…</div></div>
+</div>
+{% endblock %}
