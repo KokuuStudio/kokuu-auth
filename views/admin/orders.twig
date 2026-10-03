@@ -68,6 +68,11 @@
         <input type="number" id="s-day" name="daily_limit" class="form-control" min="0" value="{{ cfg.daily_limit }}">
       </div>
       <div>
+        <label class="ex-label" for="s-keep">兑换后保留积分</label>
+        <input type="number" id="s-keep" name="min_keep" class="form-control" min="0" value="{{ cfg.min_keep }}">
+        <p class="help-text">兑换后至少留下这么多积分，扣不到底仓。设 0 = 不保留</p>
+      </div>
+      <div>
         <label class="ex-label" for="s-ttl">订单有效期秒数</label>
         <input type="number" id="s-ttl" name="order_ttl" class="form-control" min="0" value="{{ cfg.order_ttl }}">
         <p class="help-text">超期未发放自动退积分。设 0 = 关闭（不推荐）</p>

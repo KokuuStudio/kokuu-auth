@@ -63,8 +63,16 @@
         <input type="number" id="ex-units" class="form-control" value="1" min="{{ cfg.min_units }}"
                {% if cfg.max_units > 0 %}max="{{ cfg.max_units }}"{% endif %} step="1">
         <div class="ex-quick">
-          {% for q in [1, 5, 10, 50] %}
+          {#
+            快捷数量由控制器按**可用额度**收窄（quickList），而不是写死 [1,5,10,50]：
+            余额不足时给一个必然被禁用的按钮，用户只会以为页面坏了。
+            可用 0 时列表为空 → 走 for-else 分支给出替代说明。
+            ⚠️ 收窄逻辑在 PHP 侧，不在模板里做算术（Twig 沙箱缺 max/filter 过滤器）。
+          #}
+          {% for q in quickList %}
             <button type="button" class="ex-quick-btn" data-q="{{ q }}">{{ q }}</button>
+          {% else %}
+            <span class="help-text">当前可用积分不足以兑换，请先获取积分。</span>
           {% endfor %}
         </div>
       </div>
@@ -73,6 +81,16 @@
         <span id="ex-preview-text">将消耗</span> <b id="ex-cost">-</b> 积分，
         兑换 <b id="ex-amount">-</b> 单位货币
       </div>
+      {#
+        底仓提示必须**静态渲染**，不能靠 JS 写死：
+        ① JS 未执行/被拦截时用户仍要看到规则；
+        ② 文案与数字由服务端给，不会和后端算法漂移。
+      #}
+      {% if minKeep > 0 %}
+        <p class="help-text" id="ex-keep-hint">
+          每次兑换后至少保留 {{ minKeep }} 积分，当前可用 {{ spendable }} 积分。
+        </p>
+      {% endif %}
 
       <label class="ex-label" for="ex-player">发到哪个角色</label>
       <select id="ex-player" class="form-control">
@@ -142,6 +160,17 @@
 {#资源放在 before_foot —— 内核 base 模板唯一的资源注入点（没有 block scripts） #}
 {% block before_foot %}
 <link rel="stylesheet" href="{{ url('/plugins/kokuu-exchange/assets/exchange.css') }}">
-<script>window.EX_CREATE_URL = "{{ url('/plugin/kokuu-exchange/create') }}";window.EX_COST = {{ cfg.cost_per_unit }};window.EX_MIN = {{ cfg.min_units }};</script>
+{#
+  底仓/余额由后端算好后注入，前端**不重复推导**：
+  两边算法一旦漂移，用户会看到「按钮可点但必失败」。
+  后端是唯一权威，见 kokuu_exchange_create_order 的两处 min_keep 校验。
+#}
+<script>
+  window.EX_CREATE_URL = "{{ url('/plugin/kokuu-exchange/create') }}";
+  window.EX_COST = {{ cfg.cost_per_unit }};
+  window.EX_MIN = {{ cfg.min_units }};
+  window.EX_KEEP = {{ minKeep }};
+  window.EX_BALANCE = {{ balance }};
+</script>
 <script src="{{ url('/plugins/kokuu-exchange/assets/exchange.js') }}"></script>
 {% endblock %}

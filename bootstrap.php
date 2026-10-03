@@ -11,15 +11,15 @@ use Illuminate\Support\Facades\View;
 /*
  * KokuuSkin 积分兑换（kokuu-exchange）
  *
- * 把论坛积分（users.score）兑换成游戏内 CMI 货币。
+ * 把论坛积分（users.score）兑换成游戏内货币（经 Vault / EssentialsX 发放）。
  *
  * ============================ 为什么叫「直连发放」 ============================
- * CMI（Zrips）**没有 HTTP/REST 接口**，发放动作只能由 MC 服务端里的 Java 代码
+ * 主流经济后端（Vault / EssentialsX 等）**没有 HTTP/REST 接口**，发放动作只能由 MC 服务端里的 Java 代码
  * 执行。所以「直连」的真实含义不是浏览器直接连到游戏，而是：
  *
  *     玩家在皮肤站点一下 → 生成订单（已扣积分）→ LPUSH 进 Redis 队列
  *                        → MC 端 KokuuBridge 插件 RPOP 消费
- *                        → 就地调 CMI.deposit() 发放
+ *                        → 就地调 Vault.depositPlayer() 发放
  *                        → LPUSH 结果到 result 队列
  *                        → 皮肤站消费结果，标记 done / failed
  *
@@ -41,7 +41,7 @@ use Illuminate\Support\Facades\View;
  * ============================ 三个必须守住的设计点 ============================
  *
  * 1. **订单强绑定具体角色，不是只绑定 uid**
- *    CMI 的货币是存在**玩家名**上的，deposit("Steve", 100) 扣的是 Steve 的钱。
+ *    经济后端是按**玩家**维度记账的，depositPlayer(Steve, 100) 扣的是 Steve 的钱。
  *    如果只记 uid，兑换时不知道该给哪个角色，就会出现
  *    「A 花了积分，钱进了 B 的角色」。所以下单时必须从 players 表里
  *    挑一个**本人名下**的角色存进订单。
@@ -73,7 +73,7 @@ use Illuminate\Support\Facades\View;
  *        └──(管理员作废)──> voided ──refund──> refunded
  *
  *   pending  已扣积分，已入Redis 队列等MC 端发放
- *   done     MC 端确认 CMI 发放成功（终态）
+ *   done     MC 端确认发放成功（终态）
  *   failed   MC 端报告发放失败，积分已退回
  *   refunded 积分已退回，用户可重新下单（终态）
  *   voided   管理员作废，积分已退回（终态）
@@ -100,6 +100,15 @@ if (! function_exists('kokuu_exchange_config')) {
             'cooldown'        => 300,
             // 每日兑换上限（单位货币），0 = 不限
             'daily_limit'     => 0,
+            /* ★ 兑换后必须保留的最低积分余额（默认 100）。
+             *   为什么要这条：兑换是**唯一会扣 users.score** 的功能，
+             *   而扣分后余额可能掉到 0。而皮肤站有好几项功能靠积分门槛：
+             *   兑换本身有冷却与每日上限、论坛那边活动要扣/发分、
+             *   余额为 0 时用户会彻底没有可玩的内容，直接流失。
+             *   相当于给积分账户设一个「不可动用」的底仓。
+             *   设 0 = 不保留（不推荐，等于退回可扣到 0）。
+             */
+            'min_keep'        => 100,
             // 订单有效期（秒）。超时未领取自动退款，避免用户被永久锁死
             'order_ttl'       => 86400,
             // 发放队列 key（下单时 LPUSH，MC 端 BRPOP 消费）
@@ -126,7 +135,7 @@ if (! function_exists('kokuu_exchange_config')) {
 
         // 数值型统一转成int，避免 options 表取出来是字符串导致比较出错
         foreach (['cost_per_unit', 'min_units', 'max_units', 'cooldown',
-                  'daily_limit', 'order_ttl'] as $k) {
+                  'daily_limit', 'order_ttl', 'min_keep'] as $k) {
             $values[$k] = (int) $values[$k];
         }
         foreach (['queue_key', 'result_key', 'notice'] as $k) {
@@ -142,7 +151,7 @@ if (! function_exists('kokuu_exchange_save_config')) {
     function kokuu_exchange_save_config(array $payload): void
     {
         $keys = ['cost_per_unit', 'min_units', 'max_units', 'cooldown', 'daily_limit',
-                 'queue_key', 'result_key', 'order_ttl',
+                 'queue_key', 'result_key', 'order_ttl', 'min_keep',
                  'auto_refund', 'notice'];
 
         foreach ($keys as $k) {
@@ -180,7 +189,7 @@ if (! function_exists('kokuu_exchange_ensure_tables')) {
                 // 订单号，对外暴露用（MC 端与后台都按它定位）
                 $table->string('order_no', 40)->unique();
                 $table->unsignedInteger('uid');
-                // ★ 强绑定具体角色：CMI 的货币挂在玩家名上
+                // ★ 强绑定具体角色：经济后端按玩家维度记账
                 $table->unsignedInteger('player_id');
                 $table->string('player_name', 64);
                 $table->integer('units');            // 发放的货币数量
@@ -660,8 +669,21 @@ if (! function_exists('kokuu_exchange_create_order')) {
 
         // 先做一次非事务的快速校验，给出友好提示（事务内还会再查一次）
         $balance = (int) DB::table('users')->where('uid', $uid)->value('score');
-        if ($balance < $cost) {
-            return $fail("积分不足：需要 {$cost}，当前只有 {$balance}");
+
+        /* ★ 可用余额 = 余额 - 必须保留的底仓。
+         *   两个错误一定要分开报：
+         *     - 「积分不足」→ 你连要花的钱都没有
+         *     - 「保留 N 积分」→ 钱够，但花完会跌破底仓
+         *   合成一句话用户会以为系统算错了，反复调数量试。
+         *   金额表达的是**实际要花的积分**，不是可用额度，别写成「需要 cost+keep」——
+         *   那样用户会以为要给自己留够 100 之外还得再凑 100。
+         */
+        $keep = max(0, (int) $cfg['min_keep']);
+        $spendable = $balance - $keep;
+        if ($spendable < $cost) {
+            return $fail($spendable < 0
+                ? "兑换后需保留 {$keep} 积分，当前余额 {$balance} 已不足，无法兑换"
+                : "积分不足：本次需 {$cost}，扣除保留的 {$keep} 后可用 {$spendable}");
         }
 
         $left = kokuu_exchange_cooldown_left($uid);
@@ -694,10 +716,18 @@ if (! function_exists('kokuu_exchange_create_order')) {
                 ->where('uid', $uid)
                 ->lockForUpdate()
                 ->value('score');
-            if ($balance < $cost) {
+
+            /* ⚠️ 底仓校验必须**在事务内**再查一次，不能只靠外面的预检。
+             *   预检读的是锁外的旧余额，两个并发请求可以都通过预检；
+             *   第二个事务拿到锁时余额已被第一个扣过，
+             *   若这里还只比 cost，就会把余额扣穿底仓甚至扣成负数。 */
+            $keepTx = max(0, (int) $cfg['min_keep']);
+            if (($balance - $keepTx) < $cost) {
                 return [
                     'ok'    => false,
-                    'msg'   => "积分不足：需要 {$cost}，当前只有 {$balance}",
+                    'msg'   => ($balance - $keepTx) < 0
+                        ? "兑换后需保留 {$keepTx} 积分，当前余额 {$balance} 已不足，无法兑换"
+                        : "积分不足：本次需 {$cost}，扣除保留的 {$keepTx} 后可用 " . ($balance - $keepTx),
                     'order' => null,
                 ];
             }
@@ -952,10 +982,33 @@ return function ($plugin) {
             kokuu_exchange_expire_stale();
 
             $uid = (int) $user->uid;
+            $balance = (int) DB::table('users')->where('uid', $uid)->value('score');
+            $cfg = kokuu_exchange_config();
+
+            /* ★ 派生量在 PHP 侧算好再传给模板，模板里不做算术。
+             *   原因：Blessing Skin 的 Twig 沙箱**没注册 max/min 过滤器**
+             *   （实测 `|max` 直接抛 Unknown "max" filter，整页 500），
+             *   `|filter(q => ...)` 这类箭头函数过滤器的可用性也不保证。
+             *   而这些是**业务算术**（可用额度 = 余额 - 底仓），
+             *   本来就不该散落在视图里 —— 前端 JS 已经要算一遍，
+             *   三处各算一次迟早漂移。统一在这里算，模板只负责显示。 */
+            $minKeep   = max(0, (int) $cfg['min_keep']);
+            $spendable = max(0, $balance - $minKeep);
+            $costPer   = max(1, (int) $cfg['cost_per_unit']);
+            $maxQuick  = (int) floor($spendable / $costPer);
 
             return view()->file($plugin->getPath() . '/views/user/exchange/index.twig', [
-                'cfg'      => kokuu_exchange_config(),
-                'balance'  => (int) DB::table('users')->where('uid', $uid)->value('score'),
+                'cfg'      => $cfg,
+                'balance'  => $balance,
+                // 供模板直接用，模板里不再出现 |max / |filter
+                'minKeep'   => $minKeep,
+                'spendable' => $spendable,
+                'quickList' => array_values(array_filter(
+                    [1, 5, 10, 50],
+                    function ($q) use ($cfg, $maxQuick) {
+                        return $q >= (int) $cfg['min_units'] && $q <= $maxQuick;
+                    }
+                )),
                 'players'  => kokuu_exchange_players_of($uid),
                 'cooldown' => kokuu_exchange_cooldown_left($uid),
                 'dailyUsed'=> kokuu_exchange_daily_units($uid),
@@ -1011,7 +1064,8 @@ return function ($plugin) {
 
             kokuu_exchange_save_config($request->only([
                 'cost_per_unit', 'min_units', 'max_units', 'cooldown', 'daily_limit',
-                'queue_key', 'result_key', 'order_ttl', 'auto_refund', 'notice',
+                'queue_key', 'result_key', 'order_ttl', 'min_keep',
+                'auto_refund', 'notice',
             ]));
 
             return back()->with('success', '兑换配置已保存');
@@ -1058,6 +1112,7 @@ return function ($plugin) {
                     'redis' => $redis,
                     'config' => [
                         'cost_per_unit' => $cfg['cost_per_unit'],
+                        'min_keep'      => $cfg['min_keep'],
                         'queue_key'     => $cfg['queue_key'],
                         'result_key'    => $cfg['result_key'],
                         'order_ttl'     => $cfg['order_ttl'],

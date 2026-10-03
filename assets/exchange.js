@@ -10,6 +10,11 @@
   var COST = parseInt(window.EX_COST, 10) || 100;
   var MIN = parseInt(window.EX_MIN, 10) || 1;
   var URL_CREATE = window.EX_CREATE_URL;
+  /* ⚠️ 底仓与余额都由后端算好后注入，**不要在前端自己查 /users**：
+   *   页面里这两个值一旦与后端不一致，用户会看到「能提交但必失败」。
+   *   后端是唯一权威（见 kokuu_exchange_create_order 的两处 min_keep 校验）。 */
+  var KEEP = parseInt(window.EX_KEEP, 10) || 0;
+  var BALANCE = parseInt(window.EX_BALANCE, 10) || 0;
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -36,11 +41,24 @@
     var units = parseInt(elUnits.value, 10) || 0;
     var cost = units * COST;
 
+    /* 一条统一的「不能提交」判定，顺序即优先级：
+     *   数量不合法 → 余额本身已低于底仓 → 本次会跌破底仓。
+     *   把余额判定放在数量之后：余额不足时提示数量毫无意义。 */
+    var blocked = '';
+
     if (units < MIN) {
-      if (elAmount) { elAmount.textContent = '-'; }
-      if (elCost) { elCost.textContent = '-'; }
+      blocked = '最少兑换 ' + MIN + ' 单位';
+    } else if (KEEP > 0 && BALANCE < KEEP) {
+      blocked = '余额 ' + BALANCE + ' 已低于需保留的 ' + KEEP + ' 积分，无法兑换';
+    } else if (KEEP > 0 && units * COST > BALANCE - KEEP) {
+      blocked = '最多可兑 ' + Math.floor(Math.max(0, BALANCE - KEEP) / COST) + ' 单位（需保留 ' + KEEP + ' 积分）';
+    }
+
+    if (blocked) {
+      if (elAmount) { elAmount.textContent = units < MIN ? '-' : String(units); }
+      if (elCost) { elCost.textContent = units < MIN ? '-' : String(cost); }
       if (elPreview) { elPreview.classList.add('is-bad'); }
-      if (elPreviewText) { elPreviewText.textContent = '最少兑换 ' + MIN + ' 单位，需要'; }
+      if (elPreviewText) { elPreviewText.textContent = blocked; }
       if (elSubmit) { elSubmit.disabled = true; }
       return;
     }
@@ -72,12 +90,12 @@
       var pid = elPlayer ? parseInt(elPlayer.value, 10) : 0;
 
       if (!pid) {
-        say('请选择要发放到的角色', 'err');
+        msg('请选择要发放到的角色', 'err');
         return;
       }
 
       elSubmit.disabled = true;
-      say('提交中…');
+      msg('提交中…');
 
       var body = new URLSearchParams();
       body.set('units', String(units));
@@ -97,15 +115,18 @@
         });
       }).then(function (j) {
         if (j && j.code === 0) {
-          say('兑换成功！正在发放到 ' + (j.order && j.order.player_name) + '，稍等几秒刷新查看。', 'ok');
+          msg('兑换成功！正在发放到 ' + (j.order && j.order.player_name) + '，稍等几秒刷新查看。', 'ok');
           elSubmit.disabled = true;
           setTimeout(function () { location.reload(); }, 1800);
         } else {
-          say((j && j.message) || '兑换失败', 'err');
+          msg((j && j.message) || '兑换失败', 'err');
           elSubmit.disabled = false;
+          /* 失败后重算：余额可能已被并发请求扣掉，
+           * 不重算的话按钮会一直停在可点状态，用户反复点全失败。 */
+          refresh();
         }
       }).catch(function (e) {
-        say('网络错误：' + e.message, 'err');
+        msg('网络错误：' + e.message, 'err');
         elSubmit.disabled = false;
       });
     });

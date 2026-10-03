@@ -1,13 +1,13 @@
 # kokuu-exchange · 积分兑换（Blessing Skin 侧）
 
 把论坛积分（`users.score`，账本在 [`kokuu-credit`](https://github.com/KokuuStudio/kokuu-credit)）
-兑换成游戏内 CMI 货币。
+兑换成游戏内货币（经Vault / EssentialsX 发放）。
 
 采用「**直连发放**」模式：玩家在皮肤站「点一下」即生成订单，
 MC 端 [`exchange-bridge`](https://github.com/KokuuStudio/exchange-bridge) 轮询领取队列并就地发放，
 **玩家不需要进游戏输入任何兑换码**。
 
-- 订单**强绑定 `players` 表里的具体角色**（CMI 认玩家名，扣的是那个角色的余额）
+- 订单**强绑定 `players` 表里的具体角色**（经济后端按玩家维度记账，扣的是那个角色的余额）
 - 带**幂等键 + 状态机**，重复领取不会双发
 - 订单超时未领取**自动退款**，不会永久锁死玩家积分
 
@@ -32,7 +32,7 @@ MC 端 [`exchange-bridge`](https://github.com/KokuuStudio/exchange-bridge) 轮�
      │<─── 「已提交，稍后到账」 │                              │                   │
      │                        │                              │<── BRPOP 领取 ────┤
      │                        │                              │                   │ 切主线程
-     │                        │                              │                   │ 调 CMI deposit()
+     │                        │                              │                   │ 调 Vault depositPlayer()
      │                        │<── LPUSH result ─────────────┤                   │
      │                        │ 下一帧 BRPOP result          │                   │
      │                        │ 订单 → done / refunded       │                   │
@@ -207,7 +207,7 @@ PHP 闭包有**独立作用域**，外层的 `use` **不会**继承到内层。
 |---|---|
 | `exchange_orders` | `id` `uid` `player_id` `units` `cost` `status` `idempotency_key` `created_at` `updated_at` |
 
-订单**强绑定 `player_id`**（`players` 表的具体角色）—— CMI 认玩家名，
+订单**强绑定 `player_id`**（`players` 表的具体角色）—— 经济后端按玩家维度记账，
 扣的是那个角色对应的账户，所以必须有 `player_id` 才能精确发放。
 
 ---
