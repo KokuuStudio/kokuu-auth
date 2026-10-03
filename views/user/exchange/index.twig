@@ -171,6 +171,20 @@
   window.EX_MIN = {{ cfg.min_units }};
   window.EX_KEEP = {{ minKeep }};
   window.EX_BALANCE = {{ balance }};
+  {#
+    CSRF token —— create 路由挂了 `web` 中间件（含 VerifyCsrfToken），
+    不带 token 一律 419「CSRF token mismatch.」。
+
+    ⚠️ 走 X-XSRF-TOKEN header 而不是表单 _token 字段：
+      Laravel 的 VerifyCsrfToken 两种都认，但 header 不用改 body 结构，
+      且与内核 React SPA（axios 自动带 X-XSRF-TOKEN）行为一致。
+      值直接取 XSRF-TOKEN cookie —— Laravel 写它时用了 CookieValuePrefix
+      前缀，所以 JS 这边**只 decodeURIComponent，不要剥前缀**。
+  #}
+  window.EX_CSRF = (function () {
+    var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  })();
 </script>
 <script src="{{ url('/plugins/kokuu-exchange/assets/exchange.js') }}"></script>
 {% endblock %}

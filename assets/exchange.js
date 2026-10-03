@@ -10,6 +10,12 @@
   var COST = parseInt(window.EX_COST, 10) || 100;
   var MIN = parseInt(window.EX_MIN, 10) || 1;
   var URL_CREATE = window.EX_CREATE_URL;
+  /* ⚠️ CSRF：create 路由挂 `web` 中间件（含 VerifyCsrfToken），
+   *   不带 X-XSRF-TOKEN 一律 419「CSRF token mismatch.」。
+   *   模板注入的 EX_CSRF 取自 XSRF-TOKEN cookie；
+   *   若为空（cookie 过期/被清），退回现场再读一次 cookie ——
+   *   页面可能被浏览器长时间开着，注入时的 cookie 已经不是最新的了。 */
+  var CSRF = window.EX_CSRF || readCookie('XSRF-TOKEN');
   /* ⚠️ 底仓与余额都由后端算好后注入，**不要在前端自己查 /users**：
    *   页面里这两个值一旦与后端不一致，用户会看到「能提交但必失败」。
    *   后端是唯一权威（见 kokuu_exchange_create_order 的两处 min_keep 校验）。 */
@@ -17,6 +23,14 @@
   var BALANCE = parseInt(window.EX_BALANCE, 10) || 0;
 
   var $ = function (id) { return document.getElementById(id); };
+
+  /* 从 document.cookie 取值并解码。
+   * ⚠️ 只 decodeURIComponent，**不要**剥 CookieValuePrefix ——
+   *   Laravel 服务端会自己剥，前端剥了反而对不上。 */
+  function readCookie(name) {
+    var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
 
   var elUnits = $('ex-units');
   var elPlayer = $('ex-player');
@@ -94,6 +108,15 @@
         return;
       }
 
+      /* CSRF cookie 读不到就直接拦下并让用户刷新。
+       * 不发这个请求：服务器会回 419 + HTML 错误页，
+       * 前端 r.json() 兜底只能显示「服务器返回异常（HTTP 419）」，
+       * 用户完全不知道要刷新页面。 */
+      if (!CSRF) {
+        msg('登录状态已过期，请刷新页面后重试', 'err');
+        return;
+      }
+
       elSubmit.disabled = true;
       msg('提交中…');
 
@@ -106,10 +129,19 @@
         credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'X-Requested-With': 'XMLHttpRequest'
+          'X-Requested-With': 'XMLHttpRequest',
+          /* 提交时再读一次 cookie，不复用加载时的快照 ——
+           * 页面开着不动也会让 session/token 轮换，用旧值必 419。 */
+          'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') || CSRF
         },
         body: body.toString()
       }).then(function (r) {
+        /* 419 = CSRF 校验失败，响应体是 HTML 错误页不是 JSON。
+         * 必须单独翻译：否则用户只会看到「服务器返回异常（HTTP 419）」，
+         * 完全不知道要刷新页面 —— 这个坑真实发生过（线上 24 次 419）。 */
+        if (r.status === 419) {
+          return { code: 1, message: '登录状态已过期，请刷新页面后重试', needReload: true };
+        }
         return r.json().catch(function () {
           return { code: 1, message: '服务器返回异常（HTTP ' + r.status + '）' };
         });
@@ -124,6 +156,9 @@
           /* 失败后重算：余额可能已被并发请求扣掉，
            * 不重算的话按钮会一直停在可点状态，用户反复点全失败。 */
           refresh();
+          if (j && j.needReload) {
+            elSubmit.disabled = true;   // token 已失效，再点也是 419，别让用户空转
+          }
         }
       }).catch(function (e) {
         msg('网络错误：' + e.message, 'err');
