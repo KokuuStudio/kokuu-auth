@@ -13,7 +13,7 @@
 
 {# 左列：积分主卡 + 最近变动，上下两张 #}
 <div class="kcDash-col">
-  <section class="kcDash-card kcDash-card--score">
+  <section class="kcDash-card">
     <header class="kcDash-head">
       <span class="kcDash-eyebrow">
         <i class="fas fa-coins"></i>
@@ -44,18 +44,31 @@
       </div>
     </div>
 
-    {# ---------- 签到状态 ---------- #}
-    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}">
-      <span class="kcDash-sign-icon">
-        <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+    {# ---------- 签到 ----------
+       按钮由本插件实现（内核的 React SignButton 挂在原生 usage widget 上，
+       我们的 grid 接管后它不会跟过来）。JS 在 assets/sign.js，
+       点击 → POST /user/sign，成功后就地刷新状态。
+       `data-kc-sign` 上的初值只是首屏渲染用，真实判定以 JS 读到的
+       score-info 为准（避免页面缓存导致倒计时不准）。
+    #}
+    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}"
+         data-kc-sign="{{ data.sign.signed ? 'done' : 'todo' }}"
+         data-kc-sign-at="{{ data.sign.at ? data.sign.at.toIso8601String() : '' }}">
+      <span class="kcDash-sign-main">
+        <span class="kcDash-sign-icon">
+          <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+        </span>
+        <span class="kcDash-sign-text">{{ data.sign.text }}</span>
       </span>
-      <span class="kcDash-sign-text">{{ data.sign.text }}</span>
-      {#本插件不负责签到，只展示状态；签到由内核的用户中心处理 #}
+      <button type="button" class="kcDash-sign-btn" {% if data.sign.signed %}disabled{% endif %}>
+        <i class="far fa-calendar-check"></i>
+        <span class="kcDash-sign-btn-text">{{ data.sign.signed ? '已签到' : '签到' }}</span>
+      </button>
     </div>
   </section>
 
   {# ---------- 最近变动 ---------- #}
-  <section class="kcDash-card kcDash-card--recent">
+  <section class="kcDash-card">
     <header class="kcDash-head">
       <span class="kcDash-eyebrow">
         <i class="fas fa-history"></i>

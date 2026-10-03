@@ -114,7 +114,7 @@ if (! function_exists('kokuu_credit_ensure_tables')) {
                 $table->unsignedInteger('uid');
                 $table->integer('delta');
                 $table->integer('balance_after');
-                // thread / reply / liked / manual
+                // thread / reply / liked / sign / manual
                 $table->string('source', 32);
                 $table->string('ref', 191)->nullable();
                 $table->string('note', 191)->nullable();
@@ -249,21 +249,47 @@ if (! function_exists('kokuu_credit_verify')) {
 if (! function_exists('kokuu_credit_stats')) {
     /**
      * 后台概览：总流水数、今日发放、用户数。
+     *
+     * ⚠️⚠️ `$uid` 一定要传对，否则仪表盘会显示别人的流水。
+     *
+     * 背景（真实 bug）：这个函数原先**根本不按 uid 过滤**，
+     * 于是仪表盘上「今日获得 / 今日笔数」统计的是**全站所有用户**
+     * 今天的流水，而不是当前用户的。用户反馈「新注册的账号（初始 1000 分、
+     * 没有任何交易）显示今日获得 +22、今日笔数 3」——那 +22/3 是站上
+     * 其他人（管理员签到、论坛发帖等）的流水，跟他本人毫无关系。
+     *
+     * 两个调用场景要的统计口径不同：
+     *   - 传 $uid：只看某个用户（仪表盘 `kokuu_credit_dashboard_data`），
+     *     用 `auth_user()->uid` 这种「当前登录用户」。
+     *   - 不传：全站汇总（后台配置页、流水页、流水 API），
+     *     这几个地方本来就要看全站，所以保持默认行为不变。
+     *
+     * @param int|null $uid 限定某个用户；null = 不限（全站）
      */
-    function kokuu_credit_stats(): array
+    function kokuu_credit_stats(?int $uid = null): array
     {
         kokuu_credit_ensure_tables();
 
+        // 今日发放/笔数：只看 delta>0（加分），可选地限定 uid
+        $todayQ = function () use ($uid) {
+            $q = DB::table('credit_ledger')
+                ->where('delta', '>', 0)
+                ->where('created_at', '>=', now()->startOfDay());
+            if ($uid !== null) {
+                $q->where('uid', $uid);
+            }
+            return $q;
+        };
+
+        $totalQ = DB::table('credit_ledger');
+        if ($uid !== null) {
+            $totalQ->where('uid', $uid);
+        }
+
         return [
-            'total'  => (int) DB::table('credit_ledger')->count(),
-            'today'  => (int) DB::table('credit_ledger')
-                ->where('delta', '>', 0)
-                ->where('created_at', '>=', now()->startOfDay())
-                ->sum('delta'),
-            'events' => (int) DB::table('credit_ledger')
-                ->where('delta', '>', 0)
-                ->where('created_at', '>=', now()->startOfDay())
-                ->count(),
+            'total'  => (int) $totalQ->count(),
+            'today'  => (int) $todayQ()->sum('delta'),
+            'events' => (int) $todayQ()->count(),
         ];
     }
 }
@@ -316,7 +342,9 @@ if (! function_exists('kokuu_credit_dashboard_data')) {
      */
     function kokuu_credit_dashboard_data(?User $user): array
     {
-        $stats = kokuu_credit_stats();
+        // ⚠️ 必须传当前用户 uid —— 不传会统计**全站**今天的流水，
+        // 新用户就会看到别人的「今日获得/今日笔数」。见 kokuu_credit_stats() 注释。
+        $stats = kokuu_credit_stats($user->uid ?? null);
         $sign  = kokuu_credit_sign_status($user->last_sign_at ?? null);
 
         // 今日已获得的积分与今日是否已签到是两件事，别混用
@@ -580,6 +608,7 @@ if (! function_exists('kokuu_credit_source_labels')) {
             'thread' => '发起主题',
             'reply'  => '回复帖子',
             'liked'  => '帖子被赞',
+            'sign'   => '每日签到',
             'manual' => '管理员手动',
             'legacy' => '历史补录',
         ];
@@ -952,6 +981,58 @@ return function ($plugin) {
                 'forum_body' => mb_substr((string) $response->body(), 0, 200),
             ]);
         })->middleware(['web']);
+
+    /*
+     * ---- 签到流水：把内核签到加分记进 credit_ledger ----
+     *
+     * 为什么需要：内核 `UserController@sign` 自己把积分加到 `users.score`
+     * 并 save()，但**不写** credit_ledger。于是签到在流水里查不到，
+     * 仪表盘「今日获得 / 今日笔数」也就统计不到它 ——
+     * 用户看到的现象是「刚签到 +92，今日获得却对不上」。
+     *
+     * ⚠️⚠️ 这里**绝不能**用 kokuu_credit_ledger()：
+     *   那个函数会在事务里 `increment` 余额，而内核 sign 已经
+     *   `$user->score += $x; $user->save();` 过了 → 会**双加**积分。
+     *   所以这里只做「补记一条流水」，不再动余额：
+     *   balance_after 直接取内核已经写好的 users.score。
+     *
+     * 幂等：event_id 用 `sign:<uid>:<日期>`，同一天重复触发会撞唯一索引
+     *   → insert 抛 1062 就忽略，天然防重复（反复点签到也不会双记）。
+     */
+    \Illuminate\Support\Facades\Event::listen('user.sign.after', function ($acquiredScore = 0) {
+        try {
+            $user = auth()->user();
+            if (! $user) {
+                return;
+            }
+            $score = (int) $acquiredScore;
+            if ($score <= 0) {
+                return;
+            }
+            kokuu_credit_ensure_tables();
+            DB::table('credit_ledger')->insert([
+                'event_id'      => 'sign:' . $user->uid . ':' . now()->toDateString(),
+                'uid'           => (int) $user->uid,
+                'delta'         => $score,
+                // 内核已 save 过，这里取当前余额**只读不写**
+                'balance_after' => (int) $user->score,
+                'source'        => 'sign',
+                'ref'           => null,
+                'note'          => '每日签到',
+                'created_at'    => now(),
+                'updated_at'    => now(),
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // 1062 = event_id 已存在（同一天重复签到）→ 幂等命中，静默忽略
+            if ($e->getCode() === '23000' || $e->getCode() === 23000) {
+                return;
+            }
+            // 记账失败绝不能把签到本身搞挂
+            error_log('[kokuu-credit] 签到流水记录失败: ' . $e->getMessage());
+        } catch (\Throwable $e) {
+            error_log('[kokuu-credit] 签到流水记录异常: ' . $e->getMessage());
+        }
+    });
     });
 
     // ---- 页面样式 ----
@@ -982,6 +1063,22 @@ return function ($plugin) {
      *   后台接管了不代表用户中心也跟着变。
      */
     Hook::addStyleFileToPage($plugin->assets('dash.css'), [
+        'admin', 'admin/*',
+        'user', 'user/*',
+    ]);
+
+    /*
+     * ---- 签到按钮脚本 ----
+     *
+     * ⚠️ 单独一个文件、且**注册在仪表盘路由上**（与 dash.css 同范围）。
+     *   不能并进 credit.js —— 那个只注册在 `admin/*` 与
+     *   `plugin/kokuu-credit/*`，而签到按钮恰好长在**用户中心**
+     *   `/user` 上。并进去的话普通用户永远看不到按钮的交互。
+     *
+     * 为什么需要它：内核签到 UI 是挂在原生 usage widget 上的 React 组件，
+     * 我们接管 grid 后该 widget 被替换掉，按钮随之消失。详见 sign.js 头注。
+     */
+    Hook::addScriptFileToPage($plugin->assets('sign.js'), [
         'admin', 'admin/*',
         'user', 'user/*',
     ]);

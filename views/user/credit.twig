@@ -18,7 +18,7 @@
 {% set data = kcDashUser %}
 
 <div class="kcDash-col">
-  <section class="kcDash-card kcDash-card--score">
+  <section class="kcDash-card">
     <header class="kcDash-head">
       <span class="kcDash-eyebrow">
         <i class="fas fa-coins"></i>
@@ -51,11 +51,24 @@
       </div>
     </div>
 
-    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}">
-      <span class="kcDash-sign-icon">
-        <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+    {# ---------- 签到 ----------
+       与后台仪表盘同一套结构（见 dashboard/credit.twig 注释）。
+       普通用户在这里看到的按钮才是真正会被点的那个，
+       所以 user 侧必须是完整可用的，不能只做展示。
+    #}
+    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}"
+         data-kc-sign="{{ data.sign.signed ? 'done' : 'todo' }}"
+         data-kc-sign-at="{{ data.sign.at ? data.sign.at.toIso8601String() : '' }}">
+      <span class="kcDash-sign-main">
+        <span class="kcDash-sign-icon">
+          <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+        </span>
+        <span class="kcDash-sign-text">{{ data.sign.text }}</span>
       </span>
-      <span class="kcDash-sign-text">{{ data.sign.text }}</span>
+      <button type="button" class="kcDash-sign-btn" {% if data.sign.signed %}disabled{% endif %}>
+        <i class="far fa-calendar-check"></i>
+        <span class="kcDash-sign-btn-text">{{ data.sign.signed ? '已签到' : '签到' }}</span>
+      </button>
     </div>
   </section>
 

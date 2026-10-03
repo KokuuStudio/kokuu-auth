@@ -83,7 +83,7 @@
 
 .kcDash-eyebrow i {
   font-size: 12px;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
 }
 
 /* ⚠️ 作用域前缀body 的原因见文件头：压过 apple.css 的 body.kokuu-apple a */
@@ -123,13 +123,13 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
 .kcDash-balance-unit {
   font-size: 15px;
   font-weight: 400;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
 }
 
 .kcDash-sub {
   font-size: 13px;
   line-height: 1.5;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   margin: 0 0 18px;
 }
 
@@ -160,15 +160,26 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
 .kcDash-metric-label {
   display: block;
   font-size: 12px;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   margin-top: 2px;
 }
 
-/* ---- 签到条---- */
+/* ---- 签到条 ----
+ *
+ * 结构：整条是「状态区 + 动作区」的 flex 两端对齐。
+ *   .kcDash-sign-main  ← 左：图标 + 文字（状态说明）
+ *   .kcDash-sign-btn   ← 右：签到按钮 / 倒计时胶囊
+ *
+ * ⚠️ 这个区块以前**只显示状态、没有按钮**，原因是内核签到 UI
+ *   （React 的 SignButton）挂在用户中心原生的 usage widget 上，
+ *   而我们把 grid 接管替换后没能把它带过来 —— 按钮就消失了。
+ *   现在由本插件自己实现一个等价按钮，直接调内核 `POST /user/sign`。
+ */
 .kcDash-sign {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
   padding: 11px 14px;
   border-radius: var(--a-radius-sm, 12px);
   font-size: 13px;
@@ -185,6 +196,13 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
   color: #1B7A38;
 }
 
+.kcDash-sign-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .kcDash-sign-icon {
   display: inline-flex;
   align-items: center;
@@ -199,6 +217,77 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
 .kcDash-sign-icon i {
   font-size: 10px;
   color: #fff;
+}
+
+/* ---- 签到按钮 ----
+ * 可签到：实心橙色，与 .is-todo 同色系，有明显可点感
+ * 不可签到：由 JS 打上 disabled 属性 → 变灰、无指针、不响应
+ */
+.kcDash-sign-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, #FBAA34, #F0862B);
+  box-shadow: 0 2px 8px rgba(240, 134, 43, .32);
+  transition: transform .16s cubic-bezier(.16, 1, .3, 1), box-shadow .16s ease, opacity .16s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.kcDash-sign-btn:hover:not([disabled]) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(240, 134, 43, .42);
+}
+
+.kcDash-sign-btn:active:not([disabled]) {
+  transform: translateY(0) scale(.97);
+  box-shadow: 0 2px 6px rgba(240, 134, 43, .3);
+}
+
+.kcDash-sign-btn[disabled] {
+  cursor: default;
+  color: var(--a-text-2, #6E6E73);
+  background: rgba(120, 120, 128, .12);
+  box-shadow: none;
+  opacity: 1;
+}
+
+.kcDash-sign-btn i {
+  font-size: 11px;
+}
+
+/* 提交中：禁用交互并轻微呼吸，避免连点重复签到 */
+.kcDash-sign-btn.is-loading {
+  cursor: progress;
+  opacity: .7;
+}
+
+/* 深色模式：底部有 `body.dark-mode`（内核真值），此处复用同一选择器 */
+body[class*="dark"] .kcDash-sign-btn[disabled],
+body.dark-mode .kcDash-sign-btn[disabled] {
+  color: rgba(235, 235, 245, .5);
+  background: rgba(120, 120, 128, .24);
+}
+
+body[class*="dark"] .kcDash-sign.is-todo,
+body.dark-mode .kcDash-sign.is-todo {
+  color: #FFD08A;
+}
+
+body[class*="dark"] .kcDash-sign.is-done,
+body.dark-mode .kcDash-sign.is-done {
+  color: #7BE39B;
 }
 
 /* ---- 最近变动列表 ---- */
@@ -235,7 +324,7 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
 
 .kcDash-row-time {
   font-size: 12px;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   font-variant-numeric: tabular-nums;
 }
 
@@ -249,12 +338,12 @@ body .kcDash-col .kcDash-link i { font-size: 10px; }
 
 .kcDash-row-delta.is-plus { color: #248A3D; }
 .kcDash-row-delta.is-minus { color: #D70015; }
-.kcDash-row-delta.is-zero { color: var(--a-text-secondary, #6E6E73); }
+.kcDash-row-delta.is-zero { color: var(--a-text-2, #6E6E73); }
 
 .kcDash-empty {
   font-size: 13px;
   line-height: 1.6;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   margin: 0;
   padding: 6px 0;
 }
@@ -310,7 +399,7 @@ body.kokuu-apple .kcDash-card--interop .kcDash-cta { margin-top: auto; }
 .kcDash-lede {
   font-size: 13px;
   line-height: 1.6;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   margin: 0 0 18px;
 }
 
@@ -333,7 +422,7 @@ body.kokuu-apple .kcDash-card--interop .kcDash-cta { margin-top: auto; }
 
 .kcDash-fact-label {
   font-size: 13px;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   white-space: nowrap;
   flex: 0 0 auto;
 }
@@ -385,7 +474,7 @@ body .kcDash-col a.kcDash-fact-value i { font-size: 10px; margin-left: 3px; }
 .kcDash-rule-label {
   display: block;
   font-size: 12px;
-  color: var(--a-text-secondary, #6E6E73);
+  color: var(--a-text-2, #6E6E73);
   margin-top: 2px;
 }
 
