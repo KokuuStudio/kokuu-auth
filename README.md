@@ -339,6 +339,96 @@ return $grid;
 
 ---
 
+## 六、管理员调分
+
+用户需求：「给管理员加一个可以操作所有用户积分的功能」。
+
+### 落点：就在流水页顶部，不单独开一页
+
+面板是流水页顶部一个**默认收起的 `<details>`**（`#kc-adj`），不新建路由页。
+
+理由：调分和流水是**同一件事的两半** —— 改完立刻能在下方看到那条
+`source=manual` 记录，不用来回跳。侧边栏也就不用再加一项
+（这个项目的侧边栏已经精简过一轮，见「九、侧边栏」）。
+
+### 三种模式
+
+| mode | 语义 | amount | 换算出的 delta |
+|---|---|---|---|
+| `add` | 增加 | 正数 | `+amount` |
+| `sub` | 扣减 | 正数 | `-amount` |
+| `set` | 直接设为 | 目标余额（可0） | `amount - 当前余额` |
+
+`set` 模式下 `min=0`，因为**清零是合法操作**，前端不能提前挡住；
+`add`/`sub` 下 `min=1`。数额标签（「增加」/「扣减」/「设为」）跟着模式实时变 ——
+不然界面写着「增加」实际发的是 `sub`，是很容易出账的错。
+
+### 余额从不由前端算
+
+三处都只信服务端：
+
+1. 提交后**用响应里的 `score`覆盖**页面显示，不自己加减（可能有并发改动）；
+2. 数额输入框旁边的「调整后 X」是**预览**，只给人看，不参与提交计算；
+3. 提交后重新拉一次 `/api/users` 核对落库结果。
+
+### 幂等
+
+`event_id = manual:<操作者uid>:<目标uid>:<nonce>`，nonce 由前端每次点击生成。
+
+所以：**双击是两次独立操作**（符合直觉，每次点击一个新 nonce），
+而**网络重试/回放同一个 nonce 不会重复生效**（撞 `credit_ledger` 唯一索引，
+服务端返回 422 + 「已经执行过了」）。
+
+### 校验清单（服务端，缺一不可）
+
+| 检查 | 不满足 |
+|---|---|
+| `permission >= ADMIN` | 403 |
+| `uid > 0` 且用户存在 | 422 |
+| `mode ∈ {add,sub,set}` | 422 |
+| 原因非空且 ≤100 字 | 422 |
+| 数额非空、数字、绝对值 ≤1e8 | 422 |
+| `add`/`sub` 的 amount > 0；`set` 的 amount ≥ 0 | 422 |
+| 调分后余额 **≥ 0** | 422 |
+
+⚠️ **管理员调分不受底仓 `min_keep` 约束**。底仓是给「用户自己兑换/抽奖」
+设的自保线；管理员是站点所有者，需要能纠错（发错要收回、刷分要清零）。
+但**负余额仍然拒绝**。
+
+### 两个新接口
+
+```
+GET  /plugin/kokuu-credit/api/users?q=<uid|昵称|邮箱>   # 搜索，20 条
+POST /plugin/kokuu-credit/api/adjust                # 调分
+```
+
+`users` 走 GET 不需要 CSRF；`adjust` 挂 `web` **必须**带 CSRF
+（页面侧 POST 的通例，见「踩过的坑」第 12 条）。
+
+⚠️ **`users` 表没有 `username` 列**（只有 `uid` / `email` / `nickname` / `score`）。
+搜 `nickname + email`，纯数字当 uid 精确查。写新查询前先 DESCRIBE。
+
+⚠️ 搜索的 `LIKE` 模式串要把 `%` 和 `_` 转义（`\%` `\_`），
+否则管理员搜 `%` 会捞出全表。
+
+### 前端事件绑定的脆弱性
+
+模式切换的 `change` 监听**直接绑在三个 radio 上**，不绑外层容器：
+
+```js
+Array.prototype.forEach.call(
+  document.querySelectorAll('input[name="kc-adj-mode"]'),
+  function (r) { r.addEventListener('change', syncAmountMode); }
+);
+```
+
+绑容器就得依赖 change 冒泡。一旦将来有人加 `stopPropagation`，
+或用 `new Event('change')`（**默认不冒泡**）派发，标签和 min 就会悄悄不再更新 ——
+界面显示「增加」实际发 `sub`。这个 bug 在本轮真的发生过（守卫用
+`new Event('change')` 就复现了），改成直接绑 radio 后根除。
+
+---
+
 ## 踩过的坑
 
 ### 1. `Hook::addRoute` 里的闭包要`use ($plugin)`
@@ -622,6 +712,84 @@ Hook::addScriptFileToPage($plugin->assets('apple-scope.js'), ['plugin/kokuu-cred
 
 ---
 
+### 15. CDP 的 `requestId` 在 `params` 上，不在 `params.response` 里
+
+抓响应体时踩了三轮才对：
+
+```js
+//❌ requestId 是 undefined —— response 对象里根本没有这个字段
+responses.push({ url: r.url, status: r.status, id: r.requestId });
+
+// ✅ 在 m.params.requestId
+responses.push({ url: r.url, status: r.status, id: m.params.requestId });
+```
+
+症状**极具欺骗性**：接口其实完全正常（200 + 正确 JSON），
+只是断言读不到 body，看起来像「后端返回空」。
+`loadingFinished` 时抓回来的 body 存进 Map 后永远匹配不上（key 是 `undefined`），
+`bodyOf()` 只能等超时返回空串。
+
+⚠️ 三条配套的纪律：
+
+1. **不能事后按 requestId 补取** —— 响应结束后 CDP 已释放 body，
+   `getResponseBody` 抛 `No resource with given identifier`。
+   必须在 `Network.loadingFinished` 到达时抓。
+2. **`getResponseBody` 必须带 `sessionId`**。CDP 连的是 browser 级 WS，
+   页面在 `Target.createTarget` 出来的子 target 里，flat 模式下
+   漏掉 sessionId **不报错**，只是静默作用在 browser 上 → 拿不到 body。
+3. **必须有「守卫自检」断言**：先断言「body 拿得到」，再断言 body 里的字段。
+   否则拿着 `{}` 去判 `code === 0`，会得出「后端返回了空」的错误结论 ——
+   本轮差点因此去改本来完全正确的后端代码。
+
+🔴 **守卫自己的 bug 和被验证对象的 bug 必须能区分开**。
+连续三轮都在「修后端」，而问题全在守卫里。
+判据：**先打印事件流**（`resp200 rid=undefined adjust`），
+一眼就能看出 rid 是 undefined，而不是继续猜时序。
+
+### 16. 守卫的收尾基准必须是**固定常量**，不能是「本轮起点」
+
+`--restore` 原本把「本轮开始时读到的余额」写回去。看着对，其实会**逐轮漂移**：
+
+```
+第1轮：基准 22 → 还原到 22     ✓
+第2轮：基准 22 → 还原到 22     ✓
+第3轮：基准 22 → 还原到 22     ✓
+```
+
+但如果中间有别的脚本动过余额（调试时随手发了 1 分），
+「本轮起点」就变成 23，还原到 23 —— **每跑一轮往上漂一点**。
+
+症状隐蔽：每轮都「还原成功」、退出码也是 0，
+只有拿原始基准去对才看得出漂了。
+
+正确做法：基准写成常量 `BASE_SCORE`，并且**在动手之前**就断言
+「开跑前余额 == 基准」，不一致立刻报（可能是别人真改过这个账号），
+而不是默默盖掉。
+
+配套的清理脚本（`ops/cr_restore.php`）要做**倒推核对**：
+
+```php
+$sum = (int) $rows->sum('delta');
+$implied = $score - $sum;         // 删掉这些流水后，余额应该是多少
+if ($implied !== $expectScore) {
+    // 只报告，不删 —— 期间有别的变动混进来了，删了账本就对不上
+}
+```
+
+⚠️ **删 `credit_ledger` 流水不会回退 `users.score`**（score 才是权威账本）。
+所以清理脚本必须分两步：先删流水并核对，再**显式**写回 `users.score`。
+本轮就是靠这个倒推核对发现余额差 2 分（两条调试留下的 `dbg` 记录）。
+
+### 17. 收尾操作本身也会留下痕迹
+
+「把余额还原」这个动作本身也是一次 `manual` 调分，**它自己也留一条流水**。
+所以 `--restore` 之后还需要 `cr_restore.php` 删流水 —— 两步是分开的，
+脚本输出里必须把这个命令原样打出来（不能靠人记得）。
+
+反过来看这也是对的：**余额改动就该有流水痕迹，不留才是隐患**。
+
+---
+
 ## 部署
 
 ```bash
@@ -654,6 +822,37 @@ systemctl reload php8.1-fpm
 | CSS/JS 资源 | `curl -sI <URL>` 的 `Content-Length` == 磁盘文件字节数 |
 | Twig 模板 | 渲染输出字节数变化；清 `views/twig/` 后复验 |
 | Blade 模板 | 抓页面看**字节数变化** + 关键字（如 `<script>` 个数）；<br>CLI 渲染与 HTTP 渲染字节数**不一致 = 缓存没清** |
+
+### 端到端守卫
+
+```bash
+# 管理员调分面板（65 项）
+bash ops/_with_edge.sh 9379 node ops/credit_adjust_guard.js --restore
+# 清理守卫留下的测试流水（含"还原"那一条）
+bash ops/rsh.sh --put ops/cr_restore.php /tmp/cr_restore.php
+bash ops/rsh.sh "sudo -u www-data php /tmp/cr_restore.php"
+```
+
+🔴 **`--restore` 必须带**，否则测试数据留在线上。
+不带时脚本会在结尾把补救命令打出来，不会默默跑完就忘。
+
+守卫覆盖：面板渲染（8）、资源注入（3）、用户搜索（5）、
+**419 反向对照**（2，证明 CSRF 层真在拦且什么都没发生）、
+业务校验 9 种非法输入（10）、幂等重放（3）、
+真实点击三种模式（15）、落库双查（5）、运行时健康（2）。
+
+### 守卫设计原则（本轮又验证了一遍）
+
+1. 🔴 **`ok($cond, $label, $detail)` —— 条件在第一个参数。**
+   写反成`ok('标签', 条件)` → 标签字符串恒为真 → 全绿假通过。
+   症状：`[PASS] 1`。写完必grep 首参自查。
+2. 🔴 **必须有「守卫自检」**。像「body 能不能拿到」这种**守卫自己**的能力，
+   要单独断言。抓不到 body 却继续判body 里的字段，
+   就是「验证自己的假设」而不是验证线上代码。
+3. 🔴 **守卫的 bug 和被验证对象的 bug 要能区分**。分不清就会去改本来正确的后端。
+   判据：先**打印事件流**，别猜时序。
+4. **收尾基准用固定常量**，且在动手前断言，不一致立刻报（见坑 16）。
+5. **每轮跑完清一次**（`cr_restore.php`），不要攒。
 
 ## 配置项
 

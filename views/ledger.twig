@@ -18,11 +18,82 @@
   数据由 bootstrap.php 的路由用
   View::share('ledgerStats'|'sourceLabels', ...) 挂进来；
   列表本身走 /plugin/kokuu-credit/api/ledger 异步拉。
+
+  ⚠️ 顶部「用户积分操作」面板是管理员调分入口（用户需求：
+     「给管理员加一个可以操作所有用户积分的功能」）。
+     它**刻意放在同一个页面**而不是单独一页 —— 调完分立刻能在
+     下方流水里看到那条 manual 记录，不用来回跳。
+     面板默认收起：它是低频操作，而流水是高频浏览。
 #}
 {% extends 'user.base.twig' %}
 
 {% block content %}
-<div class="container kcPage">
+<div class="container kcPage"
+     data-users-url="{{ url('/plugin/kokuu-credit/api/users') }}"
+     data-adjust-url="{{ url('/plugin/kokuu-credit/api/adjust') }}">
+
+  {# ---- 管理员调分面板（默认收起） ---- #}
+  <details class="kcPage-tools kcAdj" id="kc-adj">
+    <summary class="kcPage-tools-sum">
+      <i class="fas fa-sliders-h"></i>
+      调整用户积分
+    </summary>
+    <div class="kcPage-tools-body">
+      <p class="help-text">
+        余额改动<strong>一定</strong>会写进下方流水（来源「管理员手动」），
+        并记录操作人。扣分<strong>不受底仓限制</strong>（底仓只保护用户自己消费），
+        但不允许扣成负数。
+      </p>
+
+      {# ---- 1. 选用户 ---- #}
+      <div class="kcAdj-row">
+        <label class="kcPage-label" for="kc-adj-q">搜索用户</label>
+        <input class="kcPage-input" type="text" id="kc-adj-q"
+               placeholder="UID / 昵称 / 邮箱" autocomplete="off">
+        <button class="kcPage-btn kcPage-btn--go" id="kc-adj-search" type="button">查找</button>
+      </div>
+      <div id="kc-adj-results" class="kcAdj-results" hidden></div>
+
+      {# ---- 2. 选中的人 ---- #}
+      <div class="kcAdj-picked" id="kc-adj-picked" hidden>
+        <div class="kcAdj-picked-name">
+          <span id="kc-adj-picked-nickname"></span>
+          <span class="kcRec-uid" id="kc-adj-picked-uid"></span>
+        </div>
+        <div class="kcAdj-picked-mail" id="kc-adj-picked-email"></div>
+        <div class="kcAdj-picked-score">
+          当前余额 <b id="kc-adj-picked-score">0</b>
+        </div>
+      </div>
+
+      {# ---- 3. 操作 ---- #}
+      <div class="kcAdj-form" id="kc-adj-form" hidden>
+        <div class="kcAdj-row">
+          <label class="kcPage-label">操作</label>
+          <div class="kcAdj-modes" id="kc-adj-modes">
+            <label><input type="radio" name="kc-adj-mode" value="add" checked> 增加</label>
+            <label><input type="radio" name="kc-adj-mode" value="sub"> 扣减</label>
+            <label><input type="radio" name="kc-adj-mode" value="set"> 设为</label>
+          </div>
+        </div>
+        <div class="kcAdj-row">
+          <label class="kcPage-label" for="kc-adj-amount" id="kc-adj-amount-label">数额</label>
+          <input class="kcPage-input" type="number" id="kc-adj-amount" min="0" step="1" value="0">
+          <span class="kcAdj-preview" id="kc-adj-preview"></span>
+        </div>
+        <div class="kcAdj-row">
+          <label class="kcPage-label" for="kc-adj-note">原因</label>
+          <input class="kcPage-input" type="text" id="kc-adj-note"
+                 maxlength="100" placeholder="写清楚原因，会记进流水">
+        </div>
+        <div class="kcAdj-row">
+          <button class="kcPage-btn kcPage-btn--go" id="kc-adj-submit" type="button">确认调整</button>
+          <span class="kcAdj-msg" id="kc-adj-msg"></span>
+        </div>
+      </div>
+    </div>
+  </details>
+
   {# ---- 页头 ---- #}
   <header class="kcPage-head">
     <div>

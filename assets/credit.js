@@ -208,6 +208,242 @@
     loadLedger();
   }
 
+  /* ---------- 管理员调分面板 ---------- */
+  var adjBox = document.getElementById('kc-adj');
+  if (adjBox) {
+    var page = adjBox.closest('.kcPage') || document;
+    var urlUsers = page.getAttribute('data-users-url');
+    var urlAdjust = page.getAttribute('data-adjust-url');
+
+    var adjQ = document.getElementById('kc-adj-q');
+    var adjSearch = document.getElementById('kc-adj-search');
+    var adjResults = document.getElementById('kc-adj-results');
+    var adjPicked = document.getElementById('kc-adj-picked');
+    var adjForm = document.getElementById('kc-adj-form');
+    var adjAmount = document.getElementById('kc-adj-amount');
+    var adjAmountLabel = document.getElementById('kc-adj-amount-label');
+    var adjNote = document.getElementById('kc-adj-note');
+    var adjSubmit = document.getElementById('kc-adj-submit');
+    var adjMsg = document.getElementById('kc-adj-msg');
+    var adjPreview = document.getElementById('kc-adj-preview');
+
+    /* 当前选中的用户；null = 还没选。提交时用它做「前端有 uid」的本地短路，
+     * 但**真正的校验在服务端**（前端只是省一次请求，不是安全边界）。 */
+    var adjUid = null;
+    var adjScore = 0;
+    var adjNickname = '';
+
+    function csrfToken() {
+      var m = document.querySelector('meta[name="csrf-token"]');
+      return m ? m.getAttribute('content') : '';
+    }
+
+    function xsrfToken() {
+      var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    function adjSay(text, kind) {
+      if (!adjMsg) return;
+      adjMsg.textContent = text || '';
+      adjMsg.className = 'kcAdj-msg' + (kind ? ' is-' + kind : '');
+    }
+
+    function adjMode() {
+      var r = document.querySelector('input[name="kc-adj-mode"]:checked');
+      return r ? r.value : 'add';
+    }
+
+    /* 数额字段在set 模式下要能填 0（清零是合法操作），
+     * 在 add/sub 模式下 0 无意义但也不拦（服务端会拒并给明确文案）。 */
+    function syncAmountMode() {
+      var m = adjMode();
+      if (!adjAmount) return;
+      if (m === 'set') {
+        adjAmount.min = '0';
+        adjAmount.placeholder = '目标余额';
+        if (adjAmountLabel) adjAmountLabel.textContent = '设为';
+      } else if (m === 'sub') {
+        adjAmount.min = '1';
+        adjAmount.placeholder = '扣掉多少';
+        if (adjAmountLabel) adjAmountLabel.textContent = '扣减';
+      } else {
+        adjAmount.min = '1';
+        adjAmount.placeholder = '加上多少';
+        if (adjAmountLabel) adjAmountLabel.textContent = '增加';
+      }
+      renderPreview();
+    }
+
+    /* 实时预览「调完会变成多少」——
+     * 让管理员在点确认之前就看到结果，避免手滑输错数字。 */
+    function renderPreview() {
+      if (!adjPreview || adjUid === null) return;
+      var v = parseInt(adjAmount ? adjAmount.value : '0', 10);
+      if (isNaN(v)) { adjPreview.textContent = ''; return; }
+
+      var m = adjMode();
+      var next = m === 'set' ? v : (m === 'add' ? adjScore + v : adjScore - v);
+      adjPreview.textContent = '调整后 ' + next;
+      adjPreview.className = 'kcAdj-preview' + (next < 0 ? ' is-bad' : '');
+    }
+
+    function selectUser(u) {
+      adjUid = u.uid;
+      adjScore = u.score;
+      adjNickname = u.nickname || '';
+
+      if (adjResults) adjResults.hidden = true;
+      if (adjPicked) adjPicked.hidden = false;
+      if (adjForm) adjForm.hidden = false;
+
+      var n = document.getElementById('kc-adj-picked-nickname');
+      var id = document.getElementById('kc-adj-picked-uid');
+      var mail = document.getElementById('kc-adj-picked-email');
+      var sc = document.getElementById('kc-adj-picked-score');
+      if (n) n.textContent = adjNickname;
+      if (id) id.textContent = 'uid ' + u.uid;
+      if (mail) mail.textContent = u.email || '';
+      if (sc) sc.textContent = adjScore;
+
+      adjSay('');
+      syncAmountMode();
+    }
+
+    function doSearch() {
+      if (!urlUsers) return;
+      var q = (adjQ ? adjQ.value : '').trim();
+      if (!adjResults) return;
+
+      adjResults.hidden = false;
+      adjResults.innerHTML = '<div class="kcPage-empty">搜索中…</div>';
+
+      fetch(urlUsers + '?q=' + encodeURIComponent(q), {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var items = d.items || [];
+          if (!items.length) {
+            adjResults.innerHTML = '<div class="kcPage-empty">没找到匹配的用户</div>';
+            return;
+          }
+          adjResults.innerHTML = items.map(function (u) {
+            return '<button type="button" class="kcAdj-hit" data-uid="' + esc(u.uid) + '">' +
+              '<span class="kcAdj-hit-name">' + esc(u.nickname || '(无昵称)') + '</span>' +
+              '<span class="kcRec-uid">uid ' + esc(u.uid) + '</span>' +
+              '<span class="kcAdj-hit-mail">' + esc(u.email || '') + '</span>' +
+              '<span class="kcAdj-hit-score">' + esc(u.score) + ' 分</span>' +
+              '</button>';
+          }).join('');
+
+          Array.prototype.forEach.call(
+            adjResults.querySelectorAll('.kcAdj-hit'),
+            function (btn) {
+              btn.addEventListener('click', function () {
+                var uid = parseInt(btn.getAttribute('data-uid'), 10);
+                var hit = items.filter(function (x) { return x.uid === uid; })[0];
+                if (hit) selectUser(hit);
+              });
+            }
+          );
+        })
+        .catch(function () {
+          adjResults.innerHTML = '<div class="kcPage-empty">搜索失败，请检查网络或权限</div>';
+        });
+    }
+
+    if (adjSearch) adjSearch.addEventListener('click', doSearch);
+    if (adjQ) {
+      adjQ.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+      });
+    }
+
+    /*
+     * ⚠️ 监听器**直接绑在每个 radio 上**，不绑外层容器。
+     *   绑容器就得依赖 change 事件冒泡，一旦将来有人给某处加
+     *   stopPropagation，或者用 `new Event('change')` 这种默认不冒泡的
+     *   方式派发（测试脚本、某些框架的合成事件），标签与 min 就悄悄不再更新
+     *   —— 界面还显示「增加」，实际发的是 sub，是很难发现的错账隐患。
+     */
+    Array.prototype.forEach.call(
+      document.querySelectorAll('input[name="kc-adj-mode"]'),
+      function (r) { r.addEventListener('change', syncAmountMode); }
+    );
+    if (adjAmount) {
+      adjAmount.addEventListener('input', renderPreview);
+    }
+
+    if (adjSubmit) {
+      adjSubmit.addEventListener('click', function () {
+        if (adjUid === null) { adjSay('请先选一个用户', 'err'); return; }
+
+        var amountRaw = adjAmount ? adjAmount.value : '';
+        var note = (adjNote ? adjNote.value : '').trim();
+
+        /* 本地只拦两件最蠢的事：空数额、没写原因。
+         * 其余（数额是否超范围、是否非数字、扣成负数）都交给服务端，
+         * 因为本地复刻一遍校验逻辑 = 两处实现迟早漂移。 */
+        if (amountRaw === '') { adjSay('请填写数额', 'err'); return; }
+        if (!note) { adjSay('请填写原因', 'err'); return; }
+
+        adjSubmit.disabled = true;
+        adjSay('提交中…');
+
+        fetch(urlAdjust, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            /* 页面侧 POST 必须带 CSRF。两个头都给：
+             * X-CSRF-TOKEN 取 meta（csrf_token()），
+             * X-XSRF-TOKEN 取 cookie。
+             * ⚠️ 值必须在**点击这一刻**现读 —— session/token 会轮转，
+             *    用页面加载时的快照必 419。 */
+            'X-CSRF-TOKEN': csrfToken(),
+            'X-XSRF-TOKEN': xsrfToken()
+          },
+          /* 每次点击生成一个 nonce：双击是两次独立操作（符合直觉），
+           * 而网络重试/回放同一个 nonce 会被 event_id 唯一索引挡掉。 */
+          body: JSON.stringify({
+            uid: adjUid,
+            mode: adjMode(),
+            amount: amountRaw,
+            note: note,
+            nonce: Math.random().toString(36).slice(2) + Date.now().toString(36)
+          })
+        })
+          .then(function (r) {
+            return r.json().then(function (d) {
+              return { status: r.status, data: d };
+            });
+          })
+          .then(function (res) {
+            var d = res.data || {};
+            adjSay(d.message || '操作失败', d.code === 0 ? 'ok' : 'err');
+
+            if (d.code === 0 && typeof d.score === 'number') {
+              /* 用**服务端回传**的余额覆盖，而不是自己算 ——
+               * 真实余额只有服务端知道（可能有并发改动）。 */
+              adjScore = d.score;
+              var sc = document.getElementById('kc-adj-picked-score');
+              if (sc) sc.textContent = adjScore;
+              if (adjNote) adjNote.value = '';
+              renderPreview();
+              /* 立刻刷流水，让管理员看到刚写进去的那条 manual 记录 */
+              loadLedger();
+              if (adjQ) doSearch();
+            }
+          })
+          .catch(function () { adjSay('请求失败，请检查网络', 'err'); })
+          .then(function () { adjSubmit.disabled = false; });
+      });
+    }
+
+    syncAmountMode();
+  }
+
   function loadLedger() {
     var el = document.getElementById('kc-list');
     if (!el) return;

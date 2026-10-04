@@ -930,6 +930,184 @@ return function ($plugin) {
             ]);
         })->middleware(['web']);
 
+        // ---- 用户搜索（调分面板用，管理员 AJAX） ----
+        $router->get('plugin/kokuu-credit/api/users', function (\Illuminate\Http\Request $request) {
+            $user = $request->user();
+            abort_if(! $user || $user->permission < User::ADMIN, 403);
+
+            $q = trim((string) $request->query('q', ''));
+
+            /*
+             * ⚠️ users 表**没有 username 列**（只有 uid / email / nickname / score），
+             *    照抄别的项目的字段名会直接 Unknown column 500。
+             *    全站统一用 nickname + email 搜。
+             */
+            $query = User::query()
+                ->select('uid', 'nickname', 'email', 'score', 'permission')
+                ->orderBy('uid')
+                ->limit(20);
+
+            if ($q !== '') {
+                // 纯数字当 uid 精确查，否则按昵称/邮箱模糊匹配
+                if (ctype_digit($q)) {
+                    $query->where('uid', (int) $q);
+                } else {
+                    $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $q) . '%';
+                    $query->where(function ($sub) use ($like) {
+                        $sub->where('nickname', 'like', $like)
+                            ->orWhere('email', 'like', $like);
+                    });
+                }
+            }
+
+            return response()->json([
+                'code'  => 0,
+                'items' => $query->get()->map(function ($u) {
+                    return [
+                        'uid'        => (int) $u->uid,
+                        'nickname'   => $u->nickname,
+                        'email'      => $u->email,
+                        'score'      => (int) $u->score,
+                        'permission' => (int) $u->permission,
+                    ];
+                })->all(),
+            ]);
+        })->middleware(['web']);
+
+        /*
+         * ---- 管理员调分 ----
+         *
+         * 三种模式（mode）：
+         *   add  加分，amount 为正数
+         *   sub  扣分，amount 为正数（内部取负）
+         *   set  直接把余额设为 amount（内部换算成差额）
+         *
+         * ★ 余额永远只经 kokuu_credit_ledger() 改，那里有 event_id 唯一索引
+         *   作幂等键、且余额是数据库层 increment，不会并发丢更新。
+         *   绝不直接 DB::table('users')->update(['score' => ...]) ——
+         *   那样既没有流水，账本也永远不会自洽。
+         */
+        $router->post('plugin/kokuu-credit/api/adjust', function (\Illuminate\Http\Request $request) {
+            $admin = $request->user();
+            abort_if(! $admin || $admin->permission < User::ADMIN, 403);
+
+            if (! function_exists('kokuu_credit_ledger')) {
+                return response()->json(
+                    ['code' => 1, 'message' => '账本函数缺失，请检查 kokuu-credit 是否完整'],
+                    500
+                );
+            }
+            kokuu_credit_ensure_tables();
+
+            $uid   = (int) $request->input('uid', 0);
+            $mode  = (string) $request->input('mode', '');
+            $note  = trim((string) $request->input('note', ''));
+            $raw   = $request->input('amount');
+
+            if ($uid <= 0) {
+                return response()->json(['code' => 1, 'message' => '请选择用户'], 422);
+            }
+            if (! in_array($mode, ['add', 'sub', 'set'], true)) {
+                return response()->json(['code' => 1, 'message' => '未知的操作类型'], 422);
+            }
+            if ($note === '') {
+                return response()->json(['code' => 1, 'message' => '请填写原因，这条会写进流水'], 422);
+            }
+            if (mb_strlen($note) > 100) {
+                return response()->json(['code' => 1, 'message' => '原因请控制在 100 字以内'], 422);
+            }
+            // 空串与 0 必须区分：0 积分的调整是合法操作（清零），空串是漏填
+            if ($raw === null || $raw === '' || ! is_numeric($raw)) {
+                return response()->json(['code' => 1, 'message' => '请填写数额'], 422);
+            }
+            $amount = (int) $raw;
+            if ($mode !== 'set' && $amount <= 0) {
+                return response()->json(['code' => 1, 'message' => '数额必须大于 0'], 422);
+            }
+            if ($mode === 'set' && $amount < 0) {
+                return response()->json(['code' => 1, 'message' => '余额不能设为负数'], 422);
+            }
+            if (abs($amount) > 100000000) {
+                return response()->json(['code' => 1, 'message' => '数额超出允许范围'], 422);
+            }
+
+            $target = User::find($uid);
+            if (! $target) {
+                return response()->json(['code' => 1, 'message' => '用户不存在'], 422);
+            }
+
+            $before = (int) DB::table('users')->where('uid', $uid)->value('score');
+
+            if ($mode === 'set') {
+                $delta = $amount - $before;
+            } else {
+                $delta = $mode === 'add' ? $amount : -$amount;
+            }
+
+            if ($delta === 0) {
+                return response()->json([
+                    'code'    => 0,
+                    'message' => '余额本来就是 ' . $before . '，没有改动',
+                    'score'   => $before,
+                    'skipped' => true,
+                ]);
+            }
+
+            $after = $before + $delta;
+            if ($after < 0) {
+                return response()->json([
+                    'code'    => 1,
+                    'message' => '扣分后余额会变成负数（当前 ' . $before . '），已拒绝',
+                ], 422);
+            }
+
+            /*
+             * ⚠️ 管理员手动调分**不受底仓 min_keep 约束** —— 底仓是给
+             *    「用户自己兑换/抽奖」设的自保线，管理员是站点所有者，
+             *    需要能纠错（发错要收回、刷分要清零）。
+             *    但负余额仍然拒绝（见上面的 $after < 0）。
+             */
+
+            /*
+             * 幂等键：同一管理员 + 同一目标 + 同一 nonce 只生效一次。
+             * nonce 由前端每次点击生成，所以正常点两次就是两次独立操作
+             * （符合直觉），而网络重试/双击回放同一个 nonce 不会重复生效。
+             */
+            $nonce = trim((string) $request->input('nonce', ''));
+            if ($nonce === '') {
+                $nonce = bin2hex(random_bytes(8));
+            }
+            $eventId = 'manual:' . $admin->uid . ':' . $uid . ':' . substr($nonce, 0, 32);
+
+            $ok = kokuu_credit_ledger(
+                $uid,
+                $delta,
+                'manual',
+                $eventId,
+                'admin:' . $admin->uid,
+                $note
+            );
+
+            if (! $ok) {
+                return response()->json([
+                    'code'    => 1,
+                    'message' => '这个操作已经执行过了（幂等命中），没有重复加分',
+                ], 422);
+            }
+
+            $real = (int) DB::table('users')->where('uid', $uid)->value('score');
+
+            return response()->json([
+                'code'    => 0,
+                'message' => '已' . ($delta > 0 ? '增加' : '扣减') . ' ' . abs($delta) . ' 积分',
+                'uid'     => $uid,
+                'before'  => $before,
+                'delta'   => $delta,
+                'score'   => $real,
+                'event_id' => $eventId,
+            ]);
+        })->middleware(['web']);
+
         // ---- 签名自检（后台"测试连通"用） ----
         $router->post('plugin/kokuu-credit/api/selftest', function (\Illuminate\Http\Request $request) {
             $user = $request->user();

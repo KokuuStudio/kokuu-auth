@@ -485,3 +485,153 @@ body.dark-mode .kcRec-delta.is-minus { color: #F09595; }
   max-width: 260px;
   word-break: break-word;
 }
+
+/* ============================================================
+   管理员调分面板
+   ============================================================
+   ⚠️ 这里**不使用 transform 做 hover 位移** —— 会创建层叠上下文，
+      面板里的下拉/结果列表 z-index 出不去。统一用边框与底色表达状态。
+   ============================================================ */
+
+.kcAdj .kcPage-tools-body {
+  display: block;
+  padding: 4px 16px 16px;
+}
+
+.kcAdj .help-text {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.kcAdj-row .kcPage-label {
+  min-width: 56px;
+  margin: 0;
+}
+
+.kcAdj-row .kcPage-input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* ---- 搜索结果 ---- */
+.kcAdj-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.kcAdj-hit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-surface, #fff);
+  color: var(--a-text, #1C1C1E);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.kcAdj-hit:hover {
+  border-color: var(--a-rain, #5E5CE6);
+  background: var(--a-surface-2, #F5F5F7);
+}
+
+.kcAdj-hit-name { font-weight: 600; }
+.kcAdj-hit-mail { color: var(--a-text-2, #6E6E73); font-size: 12px; }
+.kcAdj-hit-score {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--a-rain, #5E5CE6);
+}
+
+/* ---- 已选中的用户 ---- */
+.kcAdj-picked {
+  padding: 11px 13px;
+  margin-bottom: 12px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-surface-2, #F5F5F7);
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcAdj-picked-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcAdj-picked-mail {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-picked-score {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-picked-score b {
+  font-size: 15px;
+  color: var(--a-rain, #5E5CE6);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 表单 ---- */
+.kcAdj-modes {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.kcAdj-modes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--a-text, #1C1C1E);
+  cursor: pointer;
+}
+
+.kcAdj-preview {
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kcAdj-preview.is-bad { color: #D0342C; font-weight: 600; }
+
+.kcAdj-msg {
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-msg.is-ok { color: #1D9E4B; font-weight: 600; }
+.kcAdj-msg.is-err { color: #D0342C; font-weight: 600; }
+
+@media (max-width: 480px) {
+  .kcAdj-row .kcPage-label { min-width: 100%; }
+  .kcAdj-hit-score { margin-left: 0; }
+}
