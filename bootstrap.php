@@ -52,6 +52,15 @@ if (! function_exists('kokuu_credit_config')) {
             'forum_url'      => 'https://chat.kokuu.org',
             // 与论坛端约定的 HMAC 密钥（两边必须完全一致）
             'secret'         => '',
+            /*
+             * 管理平台（KokuuPanel）用的 HMAC 密钥。
+             *
+             * 留空 = **回退到上面的 `secret`**，这样平台可以先跑起来。
+             * 但建议之后单独设一个：轮换其中一个时不该意外打断另一个 ——
+             * 论坛密钥泄露不等于要给平台也换一次，反之亦然。
+             * 设置方式：往 options 表写 kokuu_credit_admin_secret（见 save_config）。
+             */
+            'admin_secret'   => '',
             // 加分规则：发帖
             'score_thread'   => 10,
             // 加分规则：回复
@@ -240,6 +249,85 @@ if (! function_exists('kokuu_credit_verify')) {
         // 用 hash_equals 防时序攻击
         if (! hash_equals($expected, (string) $body['sign'])) {
             return '签名不正确';
+        }
+
+        return null;
+    }
+}
+
+if (! function_exists('kokuu_credit_admin_verify')) {
+    /**
+     * 校验**管理平台**调用的签名接口。
+     *
+     * 与上面的 `kokuu_credit_verify` 是两套独立的东西，刻意不合并：
+     *   - 那套给「论坛加分」用：按 email 定位账号，payload 固定为
+     *     ts.nonce.event_id.email.delta.source；
+     *   - 这套给管理平台用：按 **uid** 定位，payload 因接口而异。
+     *
+     * 合并成一个函数会让「改一边影响另一边」，而两边的调用方完全不相干 —
+     * 论坛改不动平台，平台也不该被论坛的需求牵着走。
+     *
+     * 为什么平台不能直接用 `kokuu_credit_verify`：它按 **email** 找账号，
+     * 而平台只存了 `bs_uid` / 角色名，**没有玩家邮箱**；而且 `earn` 只加分，
+     * 管理操作需要能扣分、能清零。
+     *
+     * 签名：`sign = hash_hmac('sha256', implode('.', [ts, nonce, ...$parts]), secret)`，
+     * 与现有那套同风格（点号连接 + 时间戳窗口 + nonce 去重），
+     * 这样皮肤站这边能复用同一套心智，不用再发明第二种。
+     *
+     * @param array $body  请求体
+     * @param array $parts 该接口参与签名的业务字段，**顺序必须与平台侧一致**
+     *                     （PHP 数组保序，所以 array_values 的顺序就是这里的书写顺序）
+     * @return string|null null = 通过；否则是给调用方看的原因
+     */
+    function kokuu_credit_admin_verify(array $body, array $parts): ?string
+    {
+        $cfg = kokuu_credit_config();
+
+        // 优先用独立的 admin_secret；没设就回退到论坛那个 secret，
+        // 让平台不必等第二个密钥配好才能接进来。
+        $secret = (string) ($cfg['admin_secret'] ?? '');
+        if ($secret === '') {
+            $secret = (string) ($cfg['secret'] ?? '');
+        }
+
+        if ($secret === '') {
+            return '服务端未配置密钥（kokuu_credit_admin_secret 或 kokuu_credit_secret）';
+        }
+
+        foreach (['ts', 'nonce', 'sign'] as $k) {
+            if (! isset($body[$k]) || $body[$k] === '') {
+                return "缺少参数 {$k}";
+            }
+        }
+
+        // 业务字段只要求**存在**，允许空串 ——
+        // 例如搜索接口的 kw 为空是正常情况（列出全部），不能当成漏填。
+        foreach (array_keys($parts) as $k) {
+            if (! array_key_exists($k, $body)) {
+                return "缺少参数 {$k}";
+            }
+        }
+
+        $ts = (int) $body['ts'];
+        // 时间戳偏差过大直接拒，这是防重放的第一道闸
+        if (abs(time() - $ts) > $cfg['ttl']) {
+            return '请求已过期';
+        }
+
+        $payload = implode('.', array_merge([$ts, $body['nonce']], array_values($parts)));
+        $expected = hash_hmac('sha256', $payload, $secret);
+
+        // 用 hash_equals 防时序攻击
+        if (! hash_equals($expected, (string) $body['sign'])) {
+            return '签名不正确';
+        }
+
+        // nonce 二次去重：同一签名短时间内只能成功一次。
+        // 命名空间与论坛那套分开，避免两边 nonce 撞车时互相影响。
+        $cacheKey = 'kokuu_credit_admin_nonce_' . md5((string) $body['nonce']);
+        if (! \Illuminate\Support\Facades\Cache::add($cacheKey, 1, $cfg['ttl'] + 60)) {
+            return '重复请求';
         }
 
         return null;
@@ -1107,6 +1195,211 @@ return function ($plugin) {
                 'event_id' => $eventId,
             ]);
         })->middleware(['web']);
+
+        // ---- 签名自检（后台"测试连通"用） ----
+        /*
+         * ==================================================================
+         *  管理平台（KokuuPanel）用的签名接口
+         *
+         *  平台是「结算中枢」：账本仍然只有这里一份（users.score +
+         *  credit_ledger），平台通过这三个接口读写，不另建账本。
+         *
+         *  为什么不能直接用上面的 /api/users、/api/ledger、/api/adjust：
+         *  它们是 `web` 中间件 + 管理员**会话**，只能被浏览器里已登录的
+         *  页面调用；平台是服务端到服务端，没有会话。所以这三个是同一套
+         *  业务逻辑的**签名版**，鉴权换成 kokuu_credit_admin_verify。
+         *
+         *  平台按 uid 寻址（它存了 bs_uid），不需要玩家邮箱。
+         * ==================================================================
+         */
+
+        // ---- 用户列表 / 搜索 ----
+        $router->post('plugin/kokuu-credit/api/admin/users', function (\Illuminate\Http\Request $request) {
+            $body   = $request->all();
+            $kw     = trim((string) ($body['kw'] ?? ''));
+            $page   = max(1, (int) ($body['page'] ?? 1));
+            $size   = max(1, min(100, (int) ($body['size'] ?? 20)));
+
+            $error = kokuu_credit_admin_verify($body, [
+                'kw' => $kw, 'page' => $page, 'size' => $size,
+            ]);
+            if ($error !== null) {
+                return response()->json(['code' => 1, 'message' => $error], 403);
+            }
+
+            $query = User::query();
+            if ($kw !== '') {
+                // 关键字可能是 uid（数字）、昵称或邮箱。
+                // 括号包住这一组 or，否则会和外层的其它条件串成错误的语义。
+                $query->where(function ($q) use ($kw) {
+                    if (ctype_digit($kw)) {
+                        $q->orWhere('uid', (int) $kw);
+                    }
+                    $q->orWhere('nickname', 'like', '%' . $kw . '%')
+                      ->orWhere('email', 'like', '%' . $kw . '%');
+                });
+            }
+
+            $total = (clone $query)->count();
+            $rows  = $query->orderBy('uid')
+                ->skip(($page - 1) * $size)
+                ->take($size)
+                ->get(['uid', 'nickname', 'email', 'score']);
+
+            return response()->json([
+                'code'  => 0,
+                'total' => $total,
+                'items' => $rows->map(function ($u) {
+                    return [
+                        'uid'      => (int) $u->uid,
+                        'nickname' => (string) $u->nickname,
+                        'score'    => (int) $u->score,
+                    ];
+                })->values(),
+            ]);
+        })->middleware(['api', 'throttle:300,1']);
+
+        // ---- 流水查询 ----
+        $router->post('plugin/kokuu-credit/api/admin/ledger', function (\Illuminate\Http\Request $request) {
+            $body   = $request->all();
+            $uid    = (int) ($body['uid'] ?? 0);
+            $source = trim((string) ($body['source'] ?? ''));
+            $limit  = max(1, min(200, (int) ($body['limit'] ?? 50)));
+
+            $error = kokuu_credit_admin_verify($body, [
+                'uid' => $uid, 'source' => $source, 'limit' => $limit,
+            ]);
+            if ($error !== null) {
+                return response()->json(['code' => 1, 'message' => $error], 403);
+            }
+
+            kokuu_credit_ensure_tables();
+
+            $query = DB::table('credit_ledger')->orderByDesc('id')->limit($limit);
+            if ($uid > 0) {
+                $query->where('uid', $uid);
+            }
+            if ($source !== '') {
+                $query->where('source', $source);
+            }
+            $rows = $query->get();
+
+            $uids = $rows->pluck('uid')->filter(function ($v) {
+                return $v > 0;
+            })->unique()->all();
+            $nicknames = $uids
+                ? User::whereIn('uid', $uids)->pluck('nickname', 'uid')->toArray()
+                : [];
+
+            return response()->json([
+                'code'  => 0,
+                'total' => $rows->count(),
+                'items' => $rows->map(function ($r) use ($nicknames) {
+                    return [
+                        'id'            => (int) $r->id,
+                        'uid'           => (int) $r->uid,
+                        'nickname'      => $nicknames[(int) $r->uid] ?? null,
+                        'delta'         => (int) $r->delta,
+                        'balance_after' => (int) $r->balance_after,
+                        'source'        => (string) $r->source,
+                        'ref'           => (string) ($r->ref ?? ''),
+                        'note'          => (string) ($r->note ?? ''),
+                        'event_id'      => (string) $r->event_id,
+                        // 返回**秒级时间戳**而不是 MySQL 的 datetime：
+                        // 那个字符串没有时区标记，平台在别的时区解析会整体偏移。
+                        'created_at'    => $r->created_at ? strtotime((string) $r->created_at) : 0,
+                    ];
+                })->values(),
+            ]);
+        })->middleware(['api', 'throttle:300,1']);
+
+        // ---- 改余额（含扣减 / 清零） ----
+        $router->post('plugin/kokuu-credit/api/admin/adjust', function (\Illuminate\Http\Request $request) {
+            $body     = $request->all();
+            $uid      = (int) ($body['uid'] ?? 0);
+            $delta    = (int) ($body['delta'] ?? 0);
+            $source   = trim((string) ($body['source'] ?? 'admin'));
+            $eventId  = trim((string) ($body['event_id'] ?? ''));
+            $note     = trim((string) ($body['note'] ?? ''));
+            $operator = trim((string) ($body['operator'] ?? ''));
+
+            $error = kokuu_credit_admin_verify($body, [
+                'event_id' => $eventId, 'uid' => $uid, 'delta' => $delta, 'source' => $source,
+            ]);
+            if ($error !== null) {
+                return response()->json(['code' => 1, 'message' => $error], 403);
+            }
+
+            if ($uid <= 0) {
+                return response()->json(['code' => 1, 'message' => '缺少 uid'], 422);
+            }
+            if ($delta === 0) {
+                // 不接受 0：一次「加 0 积分」在流水里毫无意义，只会制造噪音。
+                return response()->json(['code' => 1, 'message' => 'delta 不能为 0'], 422);
+            }
+            if ($eventId === '') {
+                return response()->json(['code' => 1, 'message' => '缺少 event_id（幂等键）'], 422);
+            }
+            if (mb_strlen($eventId) > 80) {
+                // credit_ledger.event_id 是 varchar(80)，超了会被数据库截断 → 幂等失效
+                return response()->json(['code' => 1, 'message' => 'event_id 超过 80 字符'], 422);
+            }
+
+            kokuu_credit_ensure_tables();
+
+            $target = User::find($uid);
+            if (! $target) {
+                return response()->json(['code' => 1, 'message' => '用户不存在'], 422);
+            }
+
+            $before = (int) DB::table('users')->where('uid', $uid)->value('score');
+            if ($before + $delta < 0) {
+                return response()->json([
+                    'code'    => 1,
+                    'message' => '扣减后余额会变成负数（当前 ' . $before . '，本次 ' . $delta . '），已拒绝',
+                ], 422);
+            }
+
+            $ok = kokuu_credit_ledger(
+                $uid,
+                $delta,
+                $source !== '' ? $source : 'admin',
+                $eventId,
+                $operator !== '' ? 'admin:' . $operator : 'admin',
+                $note !== '' ? mb_substr($note, 0, 190) : null
+            );
+
+            $balance = (int) DB::table('users')->where('uid', $uid)->value('score');
+            $ledgerId = (int) DB::table('credit_ledger')->where('event_id', $eventId)->value('id');
+
+            if (! $ok) {
+                /*
+                 * 幂等命中 —— 这是**成功语义**，不是错误。
+                 *
+                 * 幂等键的用途就是让调用方在没收到响应时重试；重试理应拿到成功，
+                 * 而不是一个需要特殊处理的分支。回 code:0 + duplicate:true，
+                 * 平台据此告诉管理员「这次没有重复入账」。
+                 * （注意与上面 /api/adjust 不同：那个是浏览器里的双击，
+                 *   报错更符合预期；这里是服务端重试，报错会让重试逻辑变复杂。）
+                 */
+                return response()->json([
+                    'code'      => 0,
+                    'duplicate' => true,
+                    'balance'   => $balance,
+                    'ledger_id' => $ledgerId,
+                    'message'   => '这个 event_id 已经处理过，本次没有重复入账',
+                ]);
+            }
+
+            return response()->json([
+                'code'      => 0,
+                'duplicate' => false,
+                'balance'   => $balance,
+                'ledger_id' => $ledgerId,
+                'before'    => $before,
+                'delta'     => $delta,
+            ]);
+        })->middleware(['api', 'throttle:300,1']);
 
         // ---- 签名自检（后台"测试连通"用） ----
         $router->post('plugin/kokuu-credit/api/selftest', function (\Illuminate\Http\Request $request) {
