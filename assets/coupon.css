@@ -82,21 +82,63 @@ body.dark-mode .cp-card {
   /* 兑换码是大写字母数字，字距稍微放开一点更好辨认 */
   letter-spacing: .06em;
 }
-.cp-redeem { flex-shrink: 0; white-space: nowrap; }
+/* ============ 兑换按钮 ============
+ * 🔴 根因（用 CDP getMatchedStylesForNode 查出来的，别再犯）：
+ *   这一条**原来只有** `flex-shrink:0; white-space:nowrap` ——
+ *   也就是**零视觉样式**。模板上写的 `Button Button--primary` 是
+ *   我自己臆造的 class 名，**全站任何 CSS 里都没有定义**（grep 过：
+ *   只在 4 个插件模板里出现过，没有任何 css 匹配）。
+ *   于是按钮就是浏览器/内核的默认外观：白底、灰边、深灰字，
+ *   跟整站青绿色调完全不搭 —— 就是用户说的「非常丑」。
+ *
+ *   对照组 kokuu-exchange 的 #ex-submit 之所以正常，
+ *   是因为它有 `.ex-submit` 规则（深青底 + 白字 + 18px 圆角）。
+ *
+ * 所以：**插件自己的按钮一律自带完整样式**，别指望内核的 class。
+ * 颜色走 --a-* 变量（与本文件其余部分一致），并带 fallback。
+ */
+.cp-redeem {
+  flex-shrink: 0;
+  white-space: nowrap;
+  /* 与输入框同高：AdminLTE 的 .form-control 高 34px，
+     按钮必须显式给高度，否则行内高度不一致、看起来是「歪的」。 */
+  height: 34px;
+  padding: 0 22px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--a-accent, #0aa2c0);
+  border: 1px solid transparent;
+  border-radius: var(--a-radius-sm, 10px);
+  cursor: pointer;
+  transition: filter .16s ease, box-shadow .16s ease;
+  /* 只用 filter/阴影做反馈，不碰 transform（会创建层叠上下文，
+     卡片里若有下拉菜单 z-index 会出不去 —— CSS 铁律 3）。 */
+}
+.cp-redeem:hover:not(:disabled) {
+  filter: brightness(1.07);
+  box-shadow: 0 3px 10px rgba(10, 162, 192, .30);
+}
+.cp-redeem:active:not(:disabled) { filter: brightness(.96); }
+.cp-redeem:focus-visible {
+  outline: 2px solid var(--a-accent, #0aa2c0);
+  outline-offset: 2px;
+}
+.cp-redeem:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+/* 忙碌态：点击后到响应回来前，禁用并降透明 */
+.cp-redeem.is-busy { opacity: .7; cursor: progress; }
 
 .cp-code-row + .help-text,
 #cp-code-hint { margin-top: 8px; }
 
-/* ============ 抽奖 ============ */
-.cp-draw-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-.cp-draw-head .cp-label { margin-bottom: 0; }
-.cp-draw-btn { width: 100%; }
+/* v1.3 删除：.cp-draw-head / .cp-draw-head .cp-label / .cp-draw-btn
+ * 抽奖已于 v1.2 搬去独立页 draw.twig，这些规则**没有任何模板引用**
+ * （已 grep 模板 + JS 确认）。留着不改的话，下次有人搜「抽奖样式」
+ * 会找到这里，然后以为兑换码页还在显示抽奖。 */
 
 /* 结果提示条。
    ⚠️ 不用 transform 做入场动画：会创建层叠上下文，

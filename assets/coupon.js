@@ -102,10 +102,15 @@ if (elRedeem) {
     if (csrfMissing()) { return; }
 
     elRedeem.disabled = true;
+    /* 忙碌态：只是视觉反馈（降透明），防连点的还是上面的 disabled。
+       🔴 disabled 的 click() 被浏览器静默忽略，所以防连点**只能靠
+          disabled**，class 是给用户看的、不是给逻辑用的。 */
+    elRedeem.classList.add('is-busy');
     say('兑换中…', 'info');
 
     post(URL_REDEEM, { code: code }).then(function (j) {
       elRedeem.disabled = false;
+      elRedeem.classList.remove('is-busy');
       if (j && j.code === 0) {
         say(j.message + (j.balance !== null && j.balance !== undefined ? '（当前 ' + j.balance + ' 积分）' : ''), 'ok');
         if (elCode) { elCode.value = ''; }
@@ -117,6 +122,7 @@ if (elRedeem) {
       }
     }).catch(function (e) {
       elRedeem.disabled = false;
+      elRedeem.classList.remove('is-busy');
       say('网络错误：' + e.message, 'err');
     });
   });

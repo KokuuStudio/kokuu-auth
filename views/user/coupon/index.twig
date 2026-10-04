@@ -59,7 +59,14 @@
     <div class="cp-code-row">
       <input type="text" id="cp-code" class="form-control" placeholder="例如 KOKUUXXXXXXXX"
              autocomplete="off" spellcheck="false" maxlength="64">
-      <button type="button" id="cp-redeem" class="Button Button--primary cp-redeem">兑换</button>
+      {# 🔴 v1.3 去掉 `Button Button--primary`：
+         那是我之前臆造的 class 名，**全站任何 CSS 里都没有定义**
+         （grep 过：只在 4 个插件模板里出现，没有任何 css 匹配）。
+         结果按钮就是浏览器默认外观 —— 白底灰边深灰字，
+         跟整站青绿色调完全不搭，也就是用户说的「兑换按钮非常丑」。
+         现在样式全在 coupon.css 的 .cp-redeem 里，颜色走 --a-* 变量。
+         **插件自己的按钮一律自带完整样式，别指望内核 class。** #}
+      <button type="button" id="cp-redeem" class="cp-redeem">兑换</button>
     </div>
     <p class="help-text" id="cp-code-hint">
       {% if cfg.daily_redeem_limit > 0 %}
