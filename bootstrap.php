@@ -847,10 +847,12 @@ if (! function_exists('kokuu_coupon_odds_table')) {
         $rows = [];
         $acc  = 0;
         $sum  = 0;
+        $weighted = 0;   /* Σ(amount × weight)，用于期望值 */
         foreach ($prizes as $p) {
             $w = max(0, (int) $p->weight);
             $pct = $total > 0 ? ($w * 100 / $total) : 0.0;
             $sum += (int) $p->amount;
+            $weighted += (int) $p->amount * $w;
             $rows[] = [
                 'label'   => (string) $p->label,
                 'amount'  => (int) $p->amount,
@@ -865,8 +867,19 @@ if (! function_exists('kokuu_coupon_odds_table')) {
         return [
             'rows'        => $rows,
             'totalWeight' => $total,
-            // 期望值：单次抽奖的平均到手积分（权重加权）
-            'expect'      => $total > 0 ? round($sum / max(1, count($rows)), 2) : 0.0,
+            /* 🔴 期望值 = Σ(amount × weight) / Σweight（**权重加权**）。
+             *
+             * ❌ 别写成 `$sum / count($rows)` —— 那是「所有奖品金额的算术平均」，
+             *    把权重信息整个丢掉了。实测默认奖品表下：
+             *      算术平均 = (0+5+10+20+50+100)/6      = 30.83
+             *      加权期望 = (0×500+5×250+…+100×5)/1000 = 5.90
+             *    虚高 5.23 倍，页面上「单抽期望」完全是错的。
+             *    这个 bug 能溜过去，是因为守卫只验了「概率合计≈100%」
+             *    （**自洽性**）而没验「期望值正确」（**业务正确性**）。
+             *
+             *    教训：守卫不能只验自洽，必须验业务口径。
+             */
+            'expect'      => $total > 0 ? round($weighted / $total, 2) : 0.0,
         ];
     }
 }
@@ -882,6 +895,75 @@ if (! function_exists('kokuu_coupon_stats')) {
             'draws_given'  => (int) DB::table('coupon_redemptions')->where('type', 'draw')->sum('value'),
             'draws_used'   => (int) DB::table('lottery_draws')->count(),
             'draw_amount'  => (int) DB::table('lottery_draws')->sum('amount'),
+        ];
+    }
+}
+
+if (! function_exists('kokuu_coupon_draw_widget_data')) {
+    /**
+     * 用户中心「幸运抽奖」widget 的数据。
+     *
+     * ⚠️ 全部派生量在这里算好，模板只负责显示：
+     *    Twig 沙箱**没有 max/min 过滤器**（|max 直接整页 500），
+     *    而且同一份算术散在 PHP/JS/Twig 三处迟早漂移。
+     *
+     * @param mixed $user  当前登录用户（App\Models\User）
+     */
+    function kokuu_coupon_draw_widget_data($user): array
+    {
+        if (! $user) {
+            return ['canDraw' => false];
+        }
+
+        kokuu_coupon_ensure_tables();
+        kokuu_coupon_ensure_default_prizes();
+
+        $uid     = (int) $user->uid;
+        $balance = (int) DB::table('users')->where('uid', $uid)->value('score');
+        $cfg     = kokuu_coupon_config();
+        $draws   = kokuu_coupon_wallet_get($uid);
+        $cost    = (int) $cfg['draw_cost'];
+        $keep    = kokuu_coupon_min_keep();
+
+        /* 与 /plugin/kokuu-coupon 页面**同一套判定**：
+         * 有次数就能抽；没次数时看「余额 - 底仓」够不够消耗。
+         * 两处各写一遍必然漂移 → 抽成同一个函数。 */
+        $spendable = max(0, $balance - $keep);
+        $canByCost = $cost > 0 && $spendable >= $cost;
+
+        $odds = kokuu_coupon_odds_table();
+
+        /* ⚠️ odds['rows'] 的元素是**关联数组**（不是对象），
+         *   且 percent 已在 kokuu_coupon_odds_table 里算好并 round 到 2 位。
+         *   写 `$r->label` 会报 Attempt to read property "label" on array。
+         *   这里只做字段挑选，不要重复做除法 —— 权威口径只有一处。 */
+        $rows = [];
+        foreach ($odds['rows'] as $r) {
+            $rows[] = [
+                'label'  => (string) $r['label'],
+                'amount' => (int) $r['amount'],
+                'pct'    => (float) $r['percent'],
+            ];
+        }
+
+        return [
+            'drawUrl'   => url('/plugin/kokuu-coupon/draw'),
+            'draws'     => $draws,
+            'balance'   => $balance,
+            'spendable' => $spendable,
+            'keep'      => $keep,
+            'cost'      => $cost,
+            'canByCost' => $canByCost,
+            'canDraw'   => $draws > 0 || $canByCost,
+            'cooldown'  => kokuu_coupon_draw_cooldown_left($uid),
+            'notice'    => (string) ($cfg['notice'] ?? ''),
+            'expect'    => $odds['expect'],
+            'odds'      => $rows,
+            'recent'    => DB::table('lottery_draws')
+                ->where('uid', $uid)
+                ->orderByDesc('id')
+                ->limit(5)
+                ->get(),
         ];
     }
 }
@@ -905,6 +987,61 @@ return function ($plugin) {
             'link'  => 'plugin/kokuu-coupon/manage',
             'icon'  => 'fa-ticket',
         ];
+    });
+
+    /* ---- 用户中心仪表盘：把「抽奖」挂成一个独立容器 ----
+     *
+     * ⚠️⚠️ 三个必须照做的点（都是踩过的）：
+     *
+     * 1. 用 `app(\Blessing\Filter::class)->add()`，**不是** Event::listen。
+     *    `grid:user.index` 是 Blessing\Filter 的钩子（内部走 `$filter->apply()`），
+     *    不是 Laravel 事件。用 Event::listen 挂不上去且**静默无效**。
+     *    且 Filter 无 facade、无 `app('filter')` 绑定，add() 是实例方法 ——
+     *    写成 `Filter::add(...)` 抛「Non-static method ... cannot be called
+     *    statically」，而 loadBootstrapper 的 catch(\Throwable){ report($th); }
+     *    **静默吞掉**它 → 表现为「插件装了但什么都不生效」，无报错、无 500。
+     *
+     * 2. 必须在传入的 $grid 上**增量改**，不能 return 一个全新数组。
+     *    这个钩子上挂了多个回调（本插件 / kokuu-credit / kokuu-forum），
+     *    是**链式**的：前一个的返回值是后一个的输入。
+     *    我第一版直接 return 新数组 → 社区卡被挪走、左边留一大片空白
+     *    （`class="col-"`，因为 layout 只有一行而 widgets 给了两行，
+     *      grid.twig 取 layout[1] 越界）。
+     *
+     * 3. 视图名用 **manifest 的 namespace 原值（双反斜杠）**：
+     *    'KokuuStudio\\KokuuCoupon::user.coupon.widget'
+     *    写短名会 500 且不提示正确名字。addNamespace() 是 merge 语义顶不掉，
+     *    覆盖要 replaceNamespace()（自己目录前插、原目录保留，丢了会 500）。
+     *
+     * 插右列 (0,1) **开头**：右列原本只有 kokuu-forum 的社区卡，
+     * 抽奖是互动内容，放开头与左列顶部的邮箱验证卡平齐，不挤左列。
+     */
+    app(\Blessing\Filter::class)->add('grid:user.index', function ($grid) {
+        $our = 'KokuuStudio\\KokuuCoupon::user.coupon.widget';
+
+        // ⚠️ 未登录时也要 return：grid 回调在 403 页也会跑，
+        //    数据函数对 null 用户只返回 ['canDraw' => false]，模板要能扛住。
+        View::share('kokuuCouponDraw', kokuu_coupon_draw_widget_data(auth()->user()));
+
+        /* widget 的 CSS/JS 挂在内核 Twig 布局的 head/footer 上。
+         * ⚠️ 这两个是 **Hook 的静态方法**（App\Services\Hook::addStyleFileToPage），
+         *    不是全局函数 —— 写裸函数名会
+         *    `Call to undefined function addStyleFileToPage()` 直接 500。
+         * ⚠️ 它们对 `view()->file()` 的**配置类页面完全无效**
+         *    （只写进内核 Twig 布局），所以：
+         *      · 管理页 manage.twig 必须**整页自包含**（已经这么做了）
+         *      · /user 是正常页面，钩子有效 → 这里注入是正解 */
+        Hook::addStyleFileToPage('/plugins/kokuu-coupon/assets/dash.css');
+        Hook::addScriptFileToPage('/plugins/kokuu-coupon/assets/dash.js');
+
+        if (! isset($grid['widgets'][0][1]) || ! is_array($grid['widgets'][0][1])) {
+            $grid['widgets'][0][1] = [];
+        }
+        if (! in_array($our, $grid['widgets'][0][1], true)) {
+            array_unshift($grid['widgets'][0][1], $our);
+        }
+
+        return $grid;
     });
 
     Hook::addRoute(function ($router) use ($plugin) {
@@ -985,12 +1122,21 @@ return function ($plugin) {
             $r = kokuu_coupon_draw((int) $user->uid, (string) $request->ip());
 
             return response()->json([
-                'code'    => $r['ok'] ? 0 : 1,
-                'message' => $r['msg'],
-                'label'   => $r['label']   ?? null,
-                'amount'  => $r['amount']  ?? 0,
-                'balance' => $r['balance'] ?? null,
-                'draws'   => $r['draws']   ?? null,
+                'code'      => $r['ok'] ? 0 : 1,
+                'message'   => $r['msg'],
+                'label'     => $r['label']   ?? null,
+                'amount'    => $r['amount']  ?? 0,
+                'balance'   => $r['balance'] ?? null,
+                'draws'     => $r['draws']   ?? null,
+                /* 🔴 必须回传**可用积分**（余额 - 底仓），不能只回传 balance。
+                 *   卡片上第二个格子标的是「可用积分」，前端拿 balance 去填它
+                 *   会显示成总余额 —— 数字大得离谱，看着像抽奖没扣钱。
+                 *   前端不该自己减（底仓只有服务端知道）。 */
+                'spendable' => max(0, (int) ($r['balance'] ?? 0) - kokuu_coupon_min_keep()),
+                /* 🔴 必须回传**真实剩余冷却**，前端不能自己猜：
+                 *   猜错（比如硬编码 3）会让按钮提前可点，连点就绕过冷却。
+                 *   抽奖成功后冷却才刚开始，所以这里查的是「刚刚这次」之后的余量。 */
+                'cooldown'  => kokuu_coupon_draw_cooldown_left((int) $user->uid),
             ], $r['ok'] ? 200 : 422);
         })->middleware(['web']);
 
@@ -1079,6 +1225,99 @@ return function ($plugin) {
         })->middleware(['web']);
 
         /* ---- 停用 / 启用某个兑换码 ---- */
+        /* ---- 抽奖设置保存（消耗、冷却、每日上限、公告）----
+         *
+         * ⚠️ 为什么单独一个路由而不是复用 prize：
+         *   prize 是「奖品表的一行」，这里是「全局设置」，粒度不同。
+         *
+         * ⚠️ Option::set() 只写 DB，**不刷** storage/options.php。
+         *   所以保存后必须跑 `sudo -u www-data php artisan options:cache`，
+         *   否则下次有人跑缓存重建时这些值才生效 —— 表现为「保存了但没生效，
+         *   过一会儿自己又变回去」。这里在响应里明确回读一次当前值，
+         *   让管理员看到「已写入 DB」这个事实（缓存未刷是部署侧的事）。
+         */
+        $router->post('plugin/kokuu-coupon/config', function (Request $request) {
+            $user = $request->user();
+            abort_if (! $user || $user->permission < User::ADMIN, 403);
+
+            $payload = [];
+
+            /* ---- 数值项：逐项校验，不接受负数/离谱值 ----
+             * 🔴 每一项都要**独立** clamp 并回显，
+             *   管理员填错一个值不该让整批保存失败、也不该被静默改掉。 */
+            $ints = [
+                'draw_cost'        => [0, 1000000, '每次消耗积分'],
+                'draw_cooldown'    => [0, 86400, '抽奖冷却（秒）'],
+                'daily_draw_limit' => [0, 100000, '每日抽奖上限'],
+                'code_length'      => [6, 32, '兑换码长度'],
+                'default_amount'   => [0, 1000000, '默认积分面额'],
+                'default_draws'    => [0, 10000, '默认抽奖次数'],
+                'code_ttl_days'    => [0, 36500, '兑换码有效期（天）'],
+                'daily_redeem_limit' => [0, 100000, '每日兑换上限'],
+                'max_uses'         => [1, 1000, '每码可用次数'],
+            ];
+            $errors = [];
+            foreach ($ints as $key => [$min, $max, $label]) {
+                if (! $request->has($key)) {
+                    continue;
+                }
+                $raw = $request->input($key);
+                if (! is_numeric($raw)) {
+                    $errors[] = $label . '必须是数字';
+                    continue;
+                }
+                $v = (int) $raw;
+                if ($v < $min || $v > $max) {
+                    /* ⚠️ 不静默 clamp：越界就报错，让管理员知道自己填错了。
+                     *   静默改成边界值 = 「我填 999999 结果保存成 1000000」，
+                     *   下次再翻记录会怀疑人生。 */
+                    $errors[] = $label . '必须在 ' . $min . ' ~ ' . $max . ' 之间（收到 ' . $v . '）';
+                    continue;
+                }
+                $payload[$key] = $v;
+            }
+
+            /* ---- 字符串项 ---- */
+            foreach (['code_alphabet', 'code_prefix', 'notice'] as $key) {
+                if (! $request->has($key)) {
+                    continue;
+                }
+                $v = (string) $request->input($key);
+                /* mb_substr 防超长：notice 太长会把 widget 顶变形，
+                   code_alphabet 太长会让生成的码没法输。 */
+                $limit = $key === 'notice' ? 200 : ($key === 'code_alphabet' ? 64 : 16);
+                $payload[$key] = mb_substr(trim($v), 0, $limit);
+            }
+
+            if ($errors) {
+                // ★ 422 = 业务失败 = 已穿过 CSRF（与全项目口径一致）
+                return response()->json([
+                    'code' => 1, 'message' => implode('；', $errors), 'errors' => $errors,
+                ], 422);
+            }
+            if (! $payload) {
+                return response()->json(['code' => 1, 'message' => '没有可保存的项'], 422);
+            }
+
+            kokuu_coupon_save_config($payload);
+
+            /* 回读并回显：让管理员看到实际落库的值，而不是他填的字符串。
+               若某个键做了类型转换（'007' -> 7），这里能立刻看出来。 */
+            $now = kokuu_coupon_config();
+            $echo = [];
+            foreach (array_keys($payload) as $k) {
+                $echo[$k] = $now[$k] ?? null;
+            }
+
+            return response()->json([
+                'code'    => 0,
+                'message' => '已保存 ' . count($payload) . ' 项',
+                'saved'   => $echo,
+                /* 提醒：options 文件缓存未刷新，下次重建缓存才生效 */
+                'hint'    => '已写入数据库；如需立即对全站生效，请执行 php artisan options:cache',
+            ]);
+        })->middleware(['web']);
+
         $router->post('plugin/kokuu-coupon/toggle', function (Request $request) {
             $user = $request->user();
             abort_if (! $user || $user->permission < User::ADMIN, 403);
@@ -1132,5 +1371,70 @@ return function ($plugin) {
                 ],
             ]);
         })->middleware(['web']);
-    });
+
+        /* ⚠️⚠️ 下面这段必须**在 addRoute 闭包内**（没有 `});` 收尾）。
+         *   我第一版在这里多写了一个 `});`，把 addRoute 提前关掉了 →
+         *   新代码落在闭包外 → `Undefined variable $router`
+         *   → 插件的**整个页面 500**（不只是这个端点坏）。
+         *   症状：所有 JS 变量（CPN_ADMIN/CPN_CSRF/CPN_MIN_KEEP）全 undefined，
+         *   守卫报一堆 FAIL，看起来像「模板注入全失效」，
+         *   实际是 PHP 致命错误。→ 先看 laravel-YYYY-MM-DD.log。
+         *
+         * ---- 守卫专用：清理测试数据 ----
+     *
+     * 存在的理由：CDP 守卫会**真的**生成兑换码（不生成的话
+     * 「生成按钮能不能用」根本没被验证过）。留着不管，
+     * 管理页「最近兑换」会堆满测试码。
+     *
+     * 🔴 安全设计（这是个删数据的端点，必须收紧）：
+     *  1. 仅 ADMIN 可用；
+     *  2. **只删 note 以指定前缀开头的码** —— 永远不会误伤真实数据；
+     *     前缀由调用方传入，但强制 4-32 位且只允许 [A-Za-z0-9_-]，
+     *     防止传空串/通配把整表删光。
+     *  3. 走 `web` 中间件 → **必须带 CSRF**，防外站 CSRF 打这个端点。
+     *  4. 连带删除 credit_ledger 里对应流水（event_id = coupon:<rid>），
+     *     否则积分账本会留下指向已删码的孤儿流水。
+     *  5. ?check=1 只查不删，供守卫做「复查归零」的断言。
+     */
+    $router->get('plugin/kokuu-coupon/purge-testdata', function (Request $request) {
+        $user = $request->user();
+        abort_if(! $user || $user->permission < User::ADMIN, 403);
+
+        $prefix = (string) $request->query('note', 'CDPGuard');
+        abort_if(! preg_match('/^[A-Za-z0-9_-]{4,32}$/', $prefix), 422, '前缀不合法');
+
+        kokuu_coupon_ensure_tables();
+
+        $ids = DB::table('coupon_codes')
+            ->where('note', 'like', $prefix . '%')
+            ->pluck('id')->all();
+
+        /* 只查不删（守卫的「复查」用） */
+        if ($request->query('check')) {
+            return response()->json(['ok' => true, 'left' => count($ids)]);
+        }
+
+        if (! $ids) {
+            return response()->json(['ok' => true, 'left' => 0, 'msg' => '没有匹配的测试数据']);
+        }
+
+        $rids = DB::table('coupon_redemptions')
+            ->whereIn('coupon_id', $ids)->pluck('id')->all();
+
+        if ($rids) {
+            DB::table('credit_ledger')
+                ->whereIn('event_id', array_map(fn ($i) => 'coupon:' . $i, $rids))
+                ->delete();
+        }
+
+        DB::table('coupon_redemptions')->whereIn('coupon_id', $ids)->delete();
+        $n = DB::table('coupon_codes')->whereIn('id', $ids)->delete();
+
+        return response()->json([
+            'ok'   => true,
+            'left' => 0,
+            'msg'  => '已清理 ' . $n . ' 个测试兑换码',
+        ]);
+    })->middleware(['web']);
+    });   // ← 收 Hook::addRoute 闭包
 };

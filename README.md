@@ -230,9 +230,136 @@ Blessing Skin 内核**没有**这个模型，用 `app('plugins')`（`App\Service
 
 **上传代码 ≠ 已注册 ≠ 已启用**，三步是分开的。
 
+### 11. `addStyleFileToPage` 是 `Hook` 的静态方法，不是全局函数
+
+```php
+Hook::addStyleFileToPage('/plugins/kokuu-coupon/assets/dash.css');   // ✅
+addStyleFileToPage('/plugins/kokuu-coupon/assets/dash.css');         // ❌ Call to undefined function
+```
+
+`app/Services/Hook.php:64`。写裸函数名**直接 500**，而且是在 grid 回调里 ——
+`loadBootstrapper()` 的 `catch(\Throwable){ report($th); }` 会静默吞掉一部分，
+表现为「卡片完全不出现」而不是「插件报错」。
+
+### 12. `odds_table()['rows']` 的元素是**关联数组**，不是对象
+
+```php
+$r->label    // ❌ Attempt to read property "label" on array
+$r['label']  // ✅
+```
+
+且 `percent` 已在那里算好并 round 到 2 位，**不要重复做除法** —— 权威口径只有一处。
+
+### 13. `users` 表**没有 `username` 列**
+
+只有 `uid` / `email` / `score` / … 。写查询前先 DESCRIBE，别照抄别的项目的字段名。
+
+### 14. 期望值必须**同步**重算，不能只算一半
+
+管理页的概率列随权重输入实时重算，但期望值原来是服务端渲染的**旧值** ——
+改完权重后「概率」变了、「单抽期望」没变，管理员会被误导。
+`recalc()` 里必须同时更新 `p-expect`，且**用同一种加权口径**（`Σ(a×w)/Σw`）。
+
+### 15. 内联 JS 注释里**不能出现反引号**
+
+```js
+const r = await ev(`(function(){
+  // 描述 grid.twig 的 `{{ include(widget) }}` 结构   ← 这一行把模板串截断了
+  return 1;
+})()`);
+```
+
+反引号会**当场**闭合模板字符串 → `SyntaxError: missing ) after argument list`，
+而 Node 报的行号指向**模板起始行**（第 1 行），跟真正出错的第 2 行差很远。
+
+**`node --check` 就能可靠抓到这类截断** —— 本轮试过写个 Python 静态检查器，
+结果它自己先假 PASS 了一版、又误报了 51 处，反而制造噪音。
+**工具自己有 5% 误报率就等于没有工具**（同「假绿」的另一种形式）。
+
+### 16. 守卫跑完必须**自己收尾**，不能靠人记得
+
+`coupon_widget_guard.js` 验成功抽奖时会**真扣积分**。收尾只打印提示不够 ——
+本轮就是因为「跑完忘了」，叠加 `cp_topup.php` 自身的符号 bug
+（`$amt` 传进来已是负数却又取 `-$amt`），把 `uid=1` 余额搞成了 `-583`。
+
+修法：`ops/cp_restore.php` 把余额与抽奖记录一并还原（带核对与复查输出），
+守卫在成功路径结束时**明确打印该跑什么**。
+
 ---
 
-## 七、部署
+## 七、用户中心「幸运抽奖」widget
+
+抽奖功能在**用户中心仪表盘**（`/user`）有一个独立容器，兑换码兑换仍在独立页
+`/plugin/kokuu-coupon`（输入一串字符的操作不适合塞进仪表盘）。
+
+### 挂载方式
+
+```php
+app(\Blessing\Filter::class)->add('grid:user.index', function ($grid) {
+    View::share('kokuuCouponDraw', kokuu_coupon_draw_widget_data(auth()->user()));
+    Hook::addStyleFileToPage('/plugins/kokuu-coupon/assets/dash.css');
+    Hook::addScriptFileToPage('/plugins/kokuu-coupon/assets/dash.js');
+
+    $our = 'KokuuStudio\\KokuuCoupon::user.coupon.widget';
+    if (! in_array($our, $grid['widgets'][0][1] ?? [], true)) {
+        array_unshift($grid['widgets'][0][1] ?? [], $our);
+    }
+    return $grid;
+});
+```
+
+落在**右列（`col-md-5`）开头** —— 右列原本只有 kokuu-forum 的社区卡，
+抽奖是互动内容，放开头与左列顶部的邮箱验证卡平齐，不挤左列的积分卡。
+
+### 四条硬约束（改这个 widget 前先读）
+
+1. **必须在传入的 `$grid` 上增量改，不能 `return` 一个全新数组。**
+   `grid:user.index` 上挂了多个回调（本插件 / kokuu-credit / kokuu-forum /
+   Yggdrasil），是**链式**的：前一个的返回值是后一个的输入。
+   直接 return 新数组 → 别人的卡被挪走，且 `layout` 行数与 `widgets` 行数不匹配
+   → `grid.twig` 取 `layout[1]` 越界 → `class="col-"` 无宽度 → 内容掉行。
+
+2. **视图名用 manifest 的 `namespace` 原值**：`KokuuStudio\KokuuCoupon::...`
+   （双反斜杠）。写短名会 500 且**不提示正确名字**。
+
+3. **`Hook::addStyleFileToPage` 对 `view()->file()` 的配置类页面完全无效**
+   （只写进内核 Twig 布局）。所以管理页 `manage.twig` 必须**整页自包含**，
+   而 `/user` 是正常页面 → 钩子有效。
+
+4. **所有派生量在 `kokuu_coupon_draw_widget_data()` 里算好再传。**
+   Twig 沙箱**没有 `max` / `min` 过滤器**（`|max` 直接整页 500）；
+   插件自定义 PHP 函数在模板里也**一律不可调用**。
+
+### 消耗规则
+
+**抽奖次数优先** —— 有次数就花次数，没有次数才按后台配置的 `draw_cost` 扣积分
+（判定在 `kokuu_coupon_draw()`，widget 与独立页共用同一套）。
+底仓 `min_keep` 与 kokuu-exchange 共用，**管理页不提供修改入口**
+（避免两个真相源）。
+
+---
+
+## 八、抽奖设置（管理页）
+
+`/plugin/kokuu-coupon/manage` 的「抽奖设置」区块可改：
+
+| 配置项 | 说明 |
+|---|---|
+| `draw_cost` | 每次消耗积分（0 = 只允许用抽奖次数） |
+| `draw_cooldown` | 冷却秒数，防连点 |
+| `daily_draw_limit` | 每日抽奖上限（0 = 不限） |
+| `notice` | 抽奖公告，空则不显示 |
+
+- 写入走 `POST /plugin/kokuu-coupon/config` → `kokuu_coupon_save_config()`。
+- **每一项独立校验并回显**，越界直接报 422 并指出字段名，
+  **不静默 clamp**（静默改成边界值 = 管理员填 999999 保存成 1000000，下次翻记录会怀疑人生）。
+- ⚠️ `Option::set()` 只写 DB，**不刷** `storage/options.php`。
+  响应里带 `hint` 提醒，需要立即全站生效就跑
+  `sudo -u www-data php artisan options:cache`。
+
+---
+
+## 九、部署
 
 ```bash
 # 上传
@@ -260,12 +387,14 @@ systemctl reload php8.1-fpm
 
 ---
 
-## 八、验证
+## 十、验证
 
 | 脚本 | 项数 | 覆盖 |
 |---|---|---|
-| `ops/verify_coupon.php` | 64 | 后端全链路：生成/兑换/一次性幂等/跨用户重放/底仓放行与拒绝/冷却/每日上限/概率/清理自检 |
-| `ops/coupon_cdp_guard.js` | 42 | 前端真实点击：侧边栏入口/渲染/CSRF 注入/反向对照/兑换/抽奖/空码短路 |
+| `ops/verify_coupon.php` | 66 | 后端全链路：生成/兑换/一次性幂等/跨用户重放/底仓放行与拒绝/冷却/每日上限/概率/期望值加权口径/清理自检 |
+| `ops/coupon_cdp_guard.js` | 42 | 独立页真实点击：侧边栏入口/渲染/CSRF 注入/反向对照/兑换/抽奖/空码短路 |
+| `ops/coupon_admin_guard.js` | 52 | 管理页（管理员视角）：整页自包含/三类接口 419 对照/类型切换/概率与期望值交叉验证/真实生成/清理/抽奖设置保存与落库验证 |
+| `ops/coupon_widget_guard.js` | 30 | 仪表盘 widget：容器位置（右列、不挤积分卡）/CSS·JS 注入/`View::share` 数据链路/disabled 反向对照/真实点击抽奖（成功与拒绝两条路径）/冷却生效 |
 
 ```bash
 # 后端
@@ -273,7 +402,24 @@ ops/rsh.sh --put ops/verify_coupon.php /tmp/verify_coupon.php
 ops/rsh.sh 'cd /var/www/kokuu-auth && sudo -u www-data php /tmp/verify_coupon.php'
 
 # 前端（CDP 必须与 headless Edge 同一条命令启动）
-bash ops/_with_edge.sh 9354 node ops/coupon_cdp_guard.js
+bash ops/_with_edge.sh 9374 node ops/coupon_admin_guard.js
+bash ops/_with_edge.sh 9377 node ops/coupon_widget_guard.js
+```
+
+### 会改数据的守卫需要配套工具
+
+`coupon_widget_guard.js` 验成功抽奖会**真扣积分**，配套：
+
+| 脚本 | 用途 |
+|---|---|
+| `ops/cp_topup.php` | 临时给 `uid=1` 加分（余额低于底仓时验不了成功路径）。冲销要传**同一 event_id** |
+| `ops/cp_restore.php` | 把余额与 `lottery_draws` 记录还原到测试前，带核对与复查输出 |
+| `ops/cp_bal.php` | 查各账号余额、抽奖钱包、当前配置（诊断用） |
+
+```bash
+ops/rsh.sh --put ops/cp_topup.php /tmp/cp_topup.php
+ops/rsh.sh 'sudo -u www-data php /tmp/cp_topup.php 400'      # 加分
+ops/rsh.sh 'sudo -u www-data php /tmp/cp_topup.php -400 <EVENT_ID>'   # 冲销
 ```
 
 ### 守卫本身的设计原则
@@ -319,9 +465,29 @@ bash ops/_with_edge.sh 9354 node ops/coupon_cdp_guard.js
 10. **任何「拒绝」验证都要有「本应成功」的对照组**，否则
     「全部失败」可能只是格式错的假象。
 
+11. **`waitFor` 要等「真正被断言的对象」，不是「页面渲染了」的代理指标。**
+    管理页那次踩得很典型：条件写的是 `g-go` / `p-table`（模板第 104~146 行），
+    而 `<script>` 在**第 258 行** → 解析器读到 146 行就返回 true，
+    script 还没执行 → `window.CPN_ADMIN` 全 `undefined`，
+    DOM 只有 11491 字节（完整 18733）。
+    **看起来像「模板注入全失效」，其实是读早了。**
+    → 凡是断言某个 JS 全局，`waitFor` 就必须等那个全局本身，
+    并加 `document.readyState === 'complete'` 兜底。**DOM 里有 id ≠ 脚本已执行。**
+
+12. **断言口径要选「与历史状态无关」的那个。**
+    「净变化 = 奖品 - 消耗」这种口径依赖基准是最新的 ——
+    前一次守卫跑过并中奖后，基准就失效了，直接假 FAIL。
+    改成业务区间 `Δ ∈ [消耗 - 最大奖品, 消耗]` 才稳。
+    同一条教训的另一个面：**前一步发了积分，后面拿旧值比 = 假失败**
+    （`verify_coupon.php` 第 7 节踩过一次）。
+
+13. **反向对照也能用来验「什么都没发生」。**
+    验证 disabled 按钮时，不只要断言「点了没反应」，
+    更要断言「**一个请求都没发出**」—— 否则「点了但请求失败」也会通过。
+
 ---
 
-## 九、相关仓库
+## 十一、相关仓库
 
 | 仓库 | 作用 |
 |---|---|
@@ -332,6 +498,6 @@ bash ops/_with_edge.sh 9354 node ops/coupon_cdp_guard.js
 
 ---
 
-## 十、许可
+## 十二、许可
 
 与 kokuu 系列其它插件一致。

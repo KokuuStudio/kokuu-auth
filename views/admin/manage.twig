@@ -19,12 +19,21 @@
   {# ⚠️ csrf_token() 在 twig 沙箱不可用；本页面所有 POST 走 cookie 里的
      XSRF-TOKEN + X-XSRF-TOKEN header，不依赖这个 meta。 #}
   <title>兑换码管理 · KokuuSkin</title>
-  {# 内核样式（AdminLTE + apple.css）—— 自己 link，钩子对本页无效 #}
-  <link rel="stylesheet" href="{{ url('/css/app.css') }}">
+  {# ⚠️ 内核 AdminLTE 的 CSS **文件名带 hash**，不是 /css/app.css：
+     public/ 下只有 app/style.249be0b.css（还有 181/home-css/spectre 等），
+     `public/css/` 目录压根不存在 → 写 /css/app.css 是 404，页面只靠
+     coupon.css 撑着（无 AdminLTE 基础样式，AdminLTE 类名全部失效，
+       但症状隐蔽：能渲染、零报错，只是配色/间距不对）。
+     正解见 resources/views/assets/style.twig：`{{ cdn_base }}/app/style.*.css`。
+     cdn_base 是全局变量，配置页虽然不进布局链，但**能拿到全局 share 的变量**。
+     ⚠️ 别写死文件名（hash 会随内核升级变）—— 升级时要核对这个路径。 #}
+  <link rel="stylesheet" href="{{ cdn_base }}/app/style.249be0b.css">
   <link rel="stylesheet" href="{{ url('/plugins/kokuu-ui/assets/apple.css') }}">
   <link rel="stylesheet" href="{{ url('/plugins/kokuu-coupon/assets/coupon.css') }}">
   <style>
-    /* 自包含兜底：万 apple.css 没加载上，页面也别塌成一坨 */
+    /* 自包含兜底：万 apple.css 没加载上，页面也别塌成一坨。
+       同时补上 AdminLTE 基础类里本页真正用到的几个（Button/form-control），
+       避免 style.*.css 加载失败时按钮和输入框完全没样式。 */
     body { background: #f5f5f7; padding: 18px; font-family: -apple-system, "PingFang SC", sans-serif; }
     .cp-wrap { max-width: 1080px; margin: 0 auto; }
     .cp-page-title { font-size: 22px; font-weight: 700; margin: 0 0 4px; color: #1c1c1e; }
@@ -35,6 +44,15 @@
     .cp-table td { color: #1c1c1e; }
     .cp-card { background: #fff; }
     .cp-stat { background: #f5f5f7; }
+    /* AdminLTE 兜底：Button / form-control / label */
+    .Button { display: inline-block; padding: 6px 14px; border: 1px solid #ced4da;
+      border-radius: 6px; background: #fff; color: #1c1c1e; font-size: 14px; cursor: pointer; }
+    .Button--primary { background: #0aa2c0; border-color: #0aa2c0; color: #fff; }
+    .Button:disabled { opacity: .55; cursor: not-allowed; }
+    .form-control { display: block; width: 100%; padding: 6px 10px; font-size: 14px;
+      color: #1c1c1e; background: #fff; border: 1px solid #ced4da; border-radius: 6px; }
+    label { display: block; font-size: 13px; color: #626c7e; margin-bottom: 4px; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body class="hold-transition sidebar-mini">
@@ -71,6 +89,45 @@
       <div class="cp-stat-num">{{ stats.draw_amount }}</div>
       <div class="cp-stat-label">抽奖发出积分</div>
     </div>
+  </div>
+
+  {# ===== 抽奖设置（消耗与规则）=====
+     放在「批量生成」之前：消耗设置是前提，
+     管理员先定「一次抽多少积分」再去生成发积分的码，顺序才顺。
+     ⚠️ 底仓（minKeep）**不在这里**——它与「积分兑换」插件共用同一个设置，
+        在那边改一次两边同时生效，硬塞进本页会造成两个真相源。 #}
+  <div class="cp-card">
+    <span class="cp-label">抽奖设置</span>
+    <p class="help-text">
+      用户在<strong>用户中心仪表盘</strong>的「幸运抽奖」卡片里抽奖。
+      有抽奖次数时优先用次数；没有次数时按下面的「每次消耗积分」扣分。
+      抽奖至少要保留 <b>{{ minKeep }}</b> 积分（与积分兑换插件共用同一设置）。
+    </p>
+    <div class="cp-admin-row">
+      <div class="cp-admin-field">
+        <label for="c-draw-cost">每次消耗积分</label>
+        <input type="number" id="c-draw-cost" class="form-control"
+               value="{{ cfg.draw_cost }}" min="0" max="1000000">
+      </div>
+      <div class="cp-admin-field">
+        <label for="c-draw-cooldown">冷却（秒）</label>
+        <input type="number" id="c-draw-cooldown" class="form-control"
+               value="{{ cfg.draw_cooldown }}" min="0" max="86400">
+      </div>
+      <div class="cp-admin-field">
+        <label for="c-daily-limit">每日上限（0=不限）</label>
+        <input type="number" id="c-daily-limit" class="form-control"
+               value="{{ cfg.daily_draw_limit }}" min="0" max="100000">
+      </div>
+      <div class="cp-admin-field" style="flex:2">
+        <label for="c-notice">抽奖公告（留空不显示）</label>
+        <input type="text" id="c-notice" class="form-control"
+               value="{{ cfg.notice }}" maxlength="200"
+               placeholder="如：每天签到送抽奖机会">
+      </div>
+      <button type="button" id="c-save" class="Button Button--primary">保存设置</button>
+    </div>
+    <div id="c-result" class="cp-result" hidden></div>
   </div>
 
   {# ===== 批量生成 ===== #}
@@ -119,7 +176,11 @@
     <span class="cp-label">抽奖奖品与概率</span>
     <p class="help-text">
       权重决定概率占比（不需要自己算百分比，页面会显示）。
-      当前总权重 {{ odds.totalWeight }}，单抽期望 {{ odds.expect }} 积分。
+      当前总权重 <b id="p-totalweight">{{ odds.totalWeight }}</b>，单抽期望
+      <b id="p-expect">{{ odds.expect }}</b> 积分。
+      {# ⚠️ 期望值是**权重加权**的 Σ(amount×weight)/Σweight，
+         不是所有奖品金额的算术平均（那个会虚高好几倍）。
+         页面带 id 是为了让守卫能读到数并交叉验证 —— 见 ops/coupon_admin_guard.js。 #}
     </p>
     <table class="cp-table" id="p-table">
       <thead>
@@ -239,8 +300,11 @@
   window.CPN_ADMIN = {
     genUrl:   "{{ url('/plugin/kokuu-coupon/generate') }}",
     prizeUrl: "{{ url('/plugin/kokuu-coupon/prize') }}",
-    toggleUrl: "{{ url('/plugin/kokuu-coupon/toggle') }}",
-    manageUrl: "{{ url('/plugin/kokuu-coupon/manage') }}"
+    toggleUrl:"{{ url('/plugin/kokuu-coupon/toggle') }}",
+    configUrl:"{{ url('/plugin/kokuu-coupon/config') }}",
+    manageUrl:"{{ url('/plugin/kokuu-coupon/manage') }}",
+    /* 守卫用：本页不引用它，但 ops/coupon_admin_guard.js 会读 */
+    purgeUrl: "{{ url('/plugin/kokuu-coupon/purge-testdata') }}"
   };
   window.CPN_CSRF = (function () {
     var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
@@ -367,6 +431,23 @@
       var en = tr.querySelector('.p-enabled');
       if (w && en && en.checked) { total += parseInt(w.value, 10) || 0; }
     });
+    /* ⚠️ 期望值必须和概率列**同步**重算。
+       之前只重算了概率列，p-expect 还是服务端渲染的旧值 ——
+       改完权重后「单抽期望」显示的是改之前的数（概率列已变、期望没变），
+       管理员会被误导。权威值仍在 PHP 侧，这里只做展示层同步。 */
+    var weighted = 0;
+    rows.forEach(function (tr) {
+      var w = tr.querySelector('.p-weight');
+      var en = tr.querySelector('.p-enabled');
+      var a = tr.querySelector('.p-amount');
+      if (w && en && en.checked) {
+        weighted += (parseInt(a ? a.value : 0, 10) || 0) * (parseInt(w.value, 10) || 0);
+      }
+    });
+    var pExpect = document.getElementById('p-expect');
+    if (pExpect) {
+      pExpect.textContent = total > 0 ? (weighted / total).toFixed(2) : '0.00';
+    }
     rows.forEach(function (tr) {
       var w = tr.querySelector('.p-weight');
       var en = tr.querySelector('.p-enabled');
@@ -408,6 +489,57 @@
       });
     });
   });
+
+  /* ---- 抽奖设置保存 ----
+   * ⚠️ 值用字符串原样发（不 parseInt）：服务端要能区分
+   *   「空字符串」与「0」—— 前者可能是管理员清空，后者是真要 0。
+   *   自己先转数字会把 '007' 变成 7，也分不清 '0' 和 ''。 */
+  var cSave = document.getElementById('c-save');
+  if (cSave) {
+    cSave.addEventListener('click', function () {
+      var cResult = document.getElementById('c-result');
+      var payload = {
+        draw_cost:        document.getElementById('c-draw-cost').value,
+        draw_cooldown:    document.getElementById('c-draw-cooldown').value,
+        daily_draw_limit: document.getElementById('c-daily-limit').value,
+        notice:           document.getElementById('c-notice').value
+      };
+      /* 🔴 数字项空值 = 想清空？服务端会因 !is_numeric 报 422。
+         *   这里先给一句本地提示，省得用户点了才看到错误。 */
+      var numKeys = ['draw_cost', 'draw_cooldown', 'daily_draw_limit'];
+      for (var i = 0; i < numKeys.length; i++) {
+        if (String(payload[numKeys[i]]).trim() === '') {
+          /* 统一走 say()：它会设 className='cp-result err'，
+             手写 class 容易和 coupon.css 里的 .cp-result-err 对不上
+             （那个类并不存在，样式全是 .cp-result.ok / .cp-result.err）。 */
+          say(cResult, '数字项不能留空（要设为不限就填 0）', 'err');
+          return;
+        }
+      }
+
+      cSave.disabled = true;
+      post(A.configUrl, payload).then(function (j) {
+        cSave.disabled = false;
+        if (j && j.code === 0) {
+          /* 用服务端**回显**的值回填，而不是管理员输入的字符串。
+             服务端做了类型转换（'007' → 7），回填后看到的才是真实落库值。 */
+          if (j.saved) {
+            Object.keys(j.saved).forEach(function (k) {
+              var el = { draw_cost: 'c-draw-cost', draw_cooldown: 'c-draw-cooldown',
+                         daily_draw_limit: 'c-daily-limit', notice: 'c-notice' }[k];
+              if (el) { document.getElementById(el).value = j.saved[k]; }
+            });
+          }
+          say(cResult, j.message + '　' + (j.hint || ''), 'ok');
+        } else {
+          say(cResult, (j && j.message) || '保存失败', 'err');
+        }
+      }).catch(function (e) {
+        cSave.disabled = false;
+        say(cResult, '网络错误：' + e.message, 'err');
+      });
+    });
+  }
 
   /* ---- 停用/启用兑换码 ---- */
   document.querySelectorAll('.c-toggle').forEach(function (btn) {

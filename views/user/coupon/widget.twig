@@ -1,0 +1,109 @@
+{#
+  用户中心 · 抽奖容器（widget）
+
+  「抽奖」从 /plugin/kokuu-coupon 独立页搬到这里，做成仪表盘上的一个容器。
+  兑换码兑换**留在原页面**（它是「输入一串字符」的操作，不适合塞进仪表盘）。
+
+  数据由 bootstrap.php 的 grid:user.index 钩子算好后 View::share('kokuuCouponDraw') 挂进来。
+  ⚠️ share 键必须带插件前缀：View::share 是全局的、不按页面隔离，
+     裸键（如 'draw'）会和其他插件/内核撞车，互相覆盖。
+  ⚠️ 绝不在 twig 里调 `{{ kokuu_coupon_*() }}`：Twig 沙箱不放行自定义 PHP 函数，
+     会报 Unknown "kokuu_coupon_..." function。所有派生量都在 PHP 侧算好。
+  ⚠️ Twig 沙箱**没有 max/min 过滤器**（|max 直接整页 500）——
+     「能不能抽」「抽几次」这类算术一律在控制器算好传进来。
+#}
+{% set d = kokuuCouponDraw %}
+
+<div class="kcpDash">
+  <div class="kcpDash-head">
+    <span class="kcpDash-title">
+      <i class="fas fa-gift"></i> 幸运抽奖
+    </span>
+    {# notice 是后台可配的公告，空则整块不渲染（别留空行） #}
+    {% if d.notice %}
+      <span class="kcpDash-notice">{{ d.notice }}</span>
+    {% endif %}
+  </div>
+
+  {# ---- 钱包：抽奖次数 + 可用积分。两个消耗途径并列显示 ---- #}
+  <div class="kcpDash-wallet">
+    <div class="kcpDash-wallet-item">
+      <span class="kcpDash-wallet-num">{{ d.draws }}</span>
+      <span class="kcpDash-wallet-label">抽奖次数</span>
+    </div>
+    <div class="kcpDash-wallet-item">
+      <span class="kcpDash-wallet-num">{{ d.spendable }}</span>
+      <span class="kcpDash-wallet-label">可用积分</span>
+    </div>
+    {% if d.cost > 0 %}
+      <div class="kcpDash-wallet-item">
+        <span class="kcpDash-wallet-num">{{ d.cost }}</span>
+        <span class="kcpDash-wallet-label">每次消耗</span>
+      </div>
+    {% endif %}
+  </div>
+
+  {#
+    消耗途径说明：**抽奖次数优先**，没有次数才扣积分。
+    这条规则由 kokuu_coupon_draw() 保证（先花次数、次数为 0 才走积分），
+    这里只是把当前实际生效的途径告诉用户。
+  #}
+  <p class="kcpDash-hint">
+    {% if d.cost > 0 %}
+      优先消耗抽奖次数，没有次数时每次扣 {{ d.cost }} 积分
+      {% if d.keep > 0 %}（积分至少保留 {{ d.keep }}）{% endif %}。
+    {% else %}
+      当前仅可用抽奖次数抽奖，暂不支持积分消耗。
+    {% endif %}
+  </p>
+
+  {# ---- 抽奖按钮 ----
+     🔴 disabled 的 click() 被浏览器**静默忽略**（一个请求都不发）。
+        所以「余额不足」必须真 disabled，不能只靠 JS 拦。
+     data-url 由 PHP 侧算好传进来（Twig 里不拼 URL，避免 base 假设）。 #}
+  <button type="button" class="kcpDash-btn" id="kcp-draw-btn"
+          data-url="{{ d.drawUrl }}"
+          {% if not d.canDraw or d.cooldown > 0 %}disabled{% endif %}>
+    <i class="fas fa-dice"></i>
+    <span id="kcp-draw-btn-text">
+      {% if d.cooldown > 0 %}
+        冷却中（{{ d.cooldown }}s）
+      {% elseif d.canDraw %}
+        立即抽奖
+      {% else %}
+        次数与积分均不足
+      {% endif %}
+    </span>
+  </button>
+
+  {# ---- 抽奖结果：抽奖后由 JS 填 ---- #}
+  <div class="kcpDash-result" id="kcp-draw-result" hidden></div>
+
+  {# ---- 概率公示：后台可配的权重实时算好传进来 ----
+     只展示，不在这里做算术（Twig 没有 max/min，且要跟后台口径一致）。 #}
+  <details class="kcpDash-odds">
+    <summary>中奖概率（单抽期望 {{ d.expect }} 积分）</summary>
+    <ul class="kcpDash-odds-list">
+      {% for r in d.odds %}
+        <li>
+          <span class="kcpDash-odds-label">{{ r.label }}</span>
+          <span class="kcpDash-odds-pct">{{ r.pct }}%</span>
+          <span class="kcpDash-odds-amt">+{{ r.amount }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </details>
+
+  {# ---- 最近抽奖：自己的记录（不是全站流水，那是管理页的事） ---- #}
+  {% if d.recent is not empty %}
+    <ul class="kcpDash-history">
+      {% for r in d.recent %}
+        <li>
+          <span class="kcpDash-history-label">{{ r.prize_label }}</span>
+          <span class="kcpDash-history-amt">+{{ r.amount }}</span>
+          <span class="kcpDash-history-time">{{ r.created_at }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>

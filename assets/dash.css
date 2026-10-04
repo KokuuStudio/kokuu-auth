@@ -1,0 +1,207 @@
+/* kokuu-coupon —— 用户中心「幸运抽奖」widget 专用样式
+ *
+ * ⚠️⚠️ 为什么这份 CSS 完全自带变量、不引用 kokuu-ui/apple.css：
+ *   1. apple.css 的作用域是 body.kokuu-apple.*，而这个类**只有后台页面**有
+ *      （rebuild.js 只在后台注入），/user 上没有 → 引用了也不会生效。
+ *   2. 更根本：即使 apple.css 里有变量，widget 卡片本身在
+ *      <section class="box">（AdminLTE card）里，而 kokuu-credit 的 dash.css
+ *      才是同层卡片真正的样式来源。**跟随它比自造一套更不容易跑偏**：
+ *      同一列里积分卡和抽奖卡必须看起来是一家人。
+ *   3. 用户中心**持久化深色偏好**（#toggle-dark-mode），所以每个颜色都要有
+ *      dark 分支，不能写死浅色。
+ *
+ * ⚠️ 卡片 hover 用阴影表达浮起，**不要 transform: translateY**：
+ *    都创建层叠上下文，卡片里如果有下拉菜单 z-index 会出不去。
+ *    同 kokuu-ui 的 CSS 铁律第 3 条。
+ */
+
+.kcpDash {
+  /* 兜底变量：与 kokuu-credit dash.css 同源，apple 变量缺失时用它 */
+  --kcp-bg:      #ffffff;
+  --kcp-fg:      #1c1c1e;
+  --kcp-sub:     #626c7e;
+  --kcp-line:    rgba(0, 0, 0, .08);
+  --kcp-chip:    rgba(10, 162, 192, .10);
+  --kcp-accent:  #0aa2c0;
+  --kcp-warn:    #d97706;
+  --kcp-shadow:  0 1px 2px rgba(0, 0, 0, .05);
+
+  color: var(--kcp-fg);
+}
+
+/* 深色偏好：用户中心是持久化的，跟随站点而不跟随系统 */
+body.dark-mode .kcpDash,
+body.skin-dark .kcpDash {
+  --kcp-bg:     #1e2229;
+  --kcp-fg:     #e8eaed;
+  --kcp-sub:    #9aa3b2;
+  --kcp-line:   rgba(255, 255, 255, .10);
+  --kcp-chip:   rgba(10, 162, 192, .18);
+  --kcp-shadow: 0 1px 2px rgba(0, 0, 0, .35);
+}
+
+/* ---------- 头部 ---------- */
+.kcpDash-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.kcpDash-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--kcp-fg);
+}
+.kcpDash-title i { color: var(--kcp-accent); margin-right: 4px; }
+.kcpDash-notice {
+  font-size: 12px;
+  color: var(--kcp-sub);
+  background: var(--kcp-chip);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+/* ---------- 钱包三宫格 ---------- */
+.kcpDash-wallet {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.kcpDash-wallet-item {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--kcp-bg);
+  border: 1px solid var(--kcp-line);
+  border-radius: 10px;
+  padding: 10px 6px;
+  text-align: center;
+  box-shadow: var(--kcp-shadow);
+}
+.kcpDash-wallet-num {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  /* 数字用等宽变体，避免抽奖后数字变化导致卡片宽度跳动 */
+  font-variant-numeric: tabular-nums;
+  color: var(--kcp-fg);
+}
+.kcpDash-wallet-label {
+  display: block;
+  font-size: 11px;
+  color: var(--kcp-sub);
+  margin-top: 2px;
+}
+
+/* ---------- 说明 ---------- */
+.kcpDash-hint {
+  font-size: 12px;
+  color: var(--kcp-sub);
+  margin: 0 0 12px;
+}
+
+/* ---------- 抽奖按钮 ---------- */
+.kcpDash-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--kcp-accent);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: box-shadow .18s ease, filter .18s ease;
+  /* 只用阴影做反馈，不碰 transform（会创建层叠上下文） */
+}
+.kcpDash-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 4px 12px rgba(10, 162, 192, .28);
+}
+.kcpDash-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.kcpDash-btn.is-busy { opacity: .7; cursor: progress; }
+
+/* ---------- 结果 ---------- */
+.kcpDash-result {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  background: var(--kcp-chip);
+  border: 1px solid var(--kcp-line);
+  color: var(--kcp-fg);
+}
+/* 中奖态：绿。⚠️ 涨=红不适用于「奖品」——奖品是收获不是行情。 */
+.kcpDash-result.is-win {
+  border-color: rgba(16, 185, 129, .45);
+  background: rgba(16, 185, 129, .12);
+}
+.kcpDash-result.is-warn {
+  border-color: rgba(217, 119, 6, .40);
+  background: rgba(217, 119, 6, .10);
+}
+.kcpDash-result-amount {
+  font-size: 18px;
+  font-weight: 700;
+  color: #10b981;
+}
+.kcpDash-result.is-warn .kcpDash-result-amount { color: var(--kcp-warn); }
+
+/* ---------- 概率公示 ---------- */
+.kcpDash-odds { margin-top: 12px; }
+.kcpDash-odds summary {
+  font-size: 12px;
+  color: var(--kcp-sub);
+  cursor: pointer;
+  user-select: none;
+}
+.kcpDash-odds-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--kcp-fg);
+}
+.kcpDash-odds-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--kcp-line);
+}
+.kcpDash-odds-list li:last-child { border-bottom: none; }
+.kcpDash-odds-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kcpDash-odds-pct  { font-variant-numeric: tabular-nums; color: var(--kcp-sub); }
+.kcpDash-odds-amt  { font-variant-numeric: tabular-nums; color: #10b981; font-weight: 600; min-width: 44px; text-align: right; }
+
+/* ---------- 最近抽奖 ---------- */
+.kcpDash-history {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 12px;
+}
+.kcpDash-history li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--kcp-line);
+  color: var(--kcp-fg);
+}
+.kcpDash-history-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kcpDash-history-amt   { color: #10b981; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kcpDash-history-time  { color: var(--kcp-sub); font-size: 11px; flex: 0 0 auto; }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 400px) {
+  .kcpDash-wallet { flex-wrap: wrap; }
+  .kcpDash-wallet-item { flex: 1 1 30%; }
+  .kcpDash-wallet-num { font-size: 18px; }
+}
