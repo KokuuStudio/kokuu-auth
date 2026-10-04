@@ -950,14 +950,20 @@ if (! function_exists('kokuu_exchange_reset_stuck')) {
 return function ($plugin) {
     View::addLocation($plugin->getPath() . '/views');
 
-    /* 侧边栏入口。给玩家的放user 区（个人兑换），管理员的放 admin 区。 */
-    \Illuminate\Support\Facades\Event::listen(\App\Events\ConfigureUserMenu::class, function ($event) {
-        $event->menu['user'][] = [
-            'title' => '积分兑换',
-            'link'  => 'plugin/kokuu-exchange',
-            'icon'  => 'fa-exchange-alt',
-        ];
-    });
+    /*
+     * 侧边栏入口。
+     *
+     * 📍 v1.2 变化：用户区的「积分兑换」**不再单独注册**，
+     *   而是被kokuu-coupon 收进「积分中心」这个可折叠二级菜单里
+     *   （用户原话：「把兑换码，抽奖，还有积分兑换折叠起来」）。
+     *   由 coupon 通过 `side_menu` 过滤器把本插件的链接插进它的 children。
+     *
+     *   ⚠️ 所以这里**只保留 admin 区的「兑换管理」**。
+     *   如果两边都注册，侧栏会同时出现「积分中心 > 积分兑换」
+     *   和一个平级的「积分兑换」—— 重复入口。
+     *
+     *管理员入口仍单独放admin 区：那是后台配置，不属于用户侧的「积分中心」。
+     */
     \Illuminate\Support\Facades\Event::listen(\App\Events\ConfigureAdminMenu::class, function ($event) {
         $event->menu['admin'][] = [
             'title' => '兑换管理',
