@@ -1,6 +1,12 @@
-/* KokuuSkin 兑换码 + 抽奖 前端
+/* KokuuSkin 兑换码前端
  *
- * ============================ 今天的教训（写之前必读） ============================
+ * ⚠️ 本文件**只管兑换码**。抽奖已移到独立页 plugin/kokuu-coupon/draw，
+ *    它的交互在 assets/draw.js 里 —— 别把抽奖逻辑再搬回来。
+ *    （用户原话：「普通用户的兑换码页面里面不需要一套抽奖了，
+ *      只需要有个输入兑换码的功能和兑换记录功能就可以了」。之前这里是
+ *      页面内抽奖 + 仪表盘 widget 抽奖两套 UI 打同一个接口，纯重复。）
+ *
+ * ============================ 踩过的坑（写之前必读） ============================
  * ① 🔴 **CSRF 必须带**：路由挂了 `web` 中间件（含 VerifyCsrfToken），
  *    fetch 不带 X-XSRF-TOKEN → 100% 报 419「CSRF token mismatch.」。
  *    这个 bug 真实发生过：headers 块里只有 Content-Type 和 X-Requested-With，
@@ -15,17 +21,11 @@
  * ③ 🔴 **提交时实时读 cookie**，不用页面加载时的快照：
  *    session/token 会随请求轮换，用旧值必 419。
  *
- * ④ 底仓/余额/次数**全部由后端算好后注入**（window.CPN_*），
- *    前端只做展示，不重复推导 —— 前后端两处算法必然漂移。
+ * ④ 余额由后端算好后注入，前端只做展示，不重复推导。
  */
 'use strict';
 
 var URL_REDEEM = window.CPN_URL_REDEEM;
-var URL_DRAW   = window.CPN_URL_DRAW;
-var DRAW_COST  = parseInt(window.CPN_DRAW_COST, 10) || 0;
-var KEEP       = parseInt(window.CPN_KEEP, 10) || 0;
-var BALANCE    = parseInt(window.CPN_BALANCE, 10) || 0;
-var DRAWS      = parseInt(window.CPN_DRAWS, 10) || 0;
 var CSRF       = window.CPN_CSRF || readCookie('XSRF-TOKEN');
 
 var $ = function (id) { return document.getElementById(id); };
@@ -50,7 +50,6 @@ function say(text, kind) {
 
 var elCode  = $('cp-code');
 var elRedeem = $('cp-redeem');
-var elDraw  = $('cp-draw');
 
 /* 统一 fetch：带 CSRF、把 419 翻译成人话 */
 function post(url, fields) {
@@ -128,53 +127,4 @@ if (elRedeem) {
       if (e.key === 'Enter') { elRedeem.click(); }
     });
   }
-}
-
-/* ---------- 抽奖 ---------- */
-if (elDraw) {
-  elDraw.addEventListener('click', function () {
-    if (csrfMissing()) { return; }
-
-    elDraw.disabled = true;
-    say('抽奖中…', 'info');
-
-    post(URL_DRAW, {}).then(function (j) {
-      if (j && j.code === 0) {
-        var extra = (j.amount > 0) ? '，获得 ' + j.amount + ' 积分' : '';
-        say('抽到：' + j.label + extra, j.amount > 0 ? 'ok' : 'info');
-
-        /* 就地更新顶部数字（避免整页刷新打断动画感），但保持与后端一致 */
-        if (j.balance !== null && j.balance !== undefined) {
-          BALANCE = j.balance;
-          var elB = $('cp-balance');
-          if (elB) { elB.textContent = String(j.balance); }
-        }
-        if (j.draws !== null && j.draws !== undefined) {
-          DRAWS = j.draws;
-          var elD = $('cp-draws');
-          if (elD) { elD.textContent = String(j.draws); }
-        }
-
-        /* 冷却提示：按 draw_cooldown 粗略倒数（后端是权威，这里只是 UX） */
-        var cd = parseInt(window.CPN_COOLDOWN, 10) || 0;
-        if (cd > 0) {
-          elDraw.disabled = true;
-          elDraw.textContent = '冷却中…';
-          setTimeout(function () {
-            elDraw.disabled = (DRAWS <= 0 && !(DRAW_COST > 0 && (BALANCE - KEEP) >= DRAW_COST));
-            elDraw.textContent = '立即抽奖';
-          }, cd * 1000);
-        } else {
-          elDraw.disabled = false;
-        }
-      } else {
-        say((j && j.message) || '抽奖失败', 'err');
-        elDraw.disabled = false;
-        if (j && j.status === 419) { elDraw.disabled = true; }
-      }
-    }).catch(function (e) {
-      elDraw.disabled = false;
-      say('网络错误：' + e.message, 'err');
-    });
-  });
 }

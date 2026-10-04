@@ -1,6 +1,14 @@
-/* kokuu-coupon —— 用户中心「幸运抽奖」widget
+/* kokuu-coupon —— 幸运抽奖（独立页 plugin/kokuu-coupon/draw）
  *
- * 用法：<script src=".../dash.js"></script>（页面底部加载，DOM 已就绪）
+ * 用法：<script src=".../draw.js"></script>（模板 before_foot 块，DOM 已就绪）
+ *
+ * 📍 这个文件跟着功能搬了两次家：dash.js（仪表盘 widget）→ draw.js（独立页）。
+ *    「dash」这个名字已经不准确了（页面路由是 draw，资源名跟它对齐），
+ *    但**类名 kcpDash-* 不要改** —— CSS 选择器、守卫断言都按它写的，
+ *    改名要连 CSS + 守卫一起改，收益不抵风险。
+ *
+ * ⚠️ 本页的抽奖记录表是**服务端渲染**的，这个 JS 不碰它
+ *   （只更新钱包数字和结果区）。要加「抽完自动刷新列表」再说。
  *
  * 🔴 本文件沿用的硬事实（都是踩过的，别改回去）：
  *  1. **CSRF 值提交时实时再读一次 cookie**。页面加载时的快照会 419 ——

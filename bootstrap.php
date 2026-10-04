@@ -974,12 +974,132 @@ return function ($plugin) {
     /* ---- 侧边栏：用户区「兑换码」，管理区「兑换码管理」 ----
      * ⚠️ 插件自己追加的 title 才是中文；内核项是 lang key（general.xxx）。
      *    写错会导致 kokuu-ui 的 side_menu 过滤器按 lang key 匹配时对不上。 */
+    /* ---- 侧边栏：「积分中心」可折叠二级菜单 ----
+     *
+     * 用户原话：「可以在侧栏做一个可以折叠的二级菜单，
+     *            把兑换码，抽奖，还有积分兑换折叠起来」。
+     *
+     * ✅ 用**内核原生**的 `children` 机制，不自己造折叠：
+     *   `resources/views/shared/side-menu-item.twig` 的 children 分支渲染成
+     *   `<ul class="nav nav-treeview">` + 父项 `fa-angle-left` 箭头 ——
+     *   这就是 AdminLTE 的 treeview，**点父项自动展开/收起**，
+     *   AdminLTE 的 sidebar.js 已绑定，零额外 JS。
+     *   自己写折叠要额外处理 active 态、移动端、持久化，纯属重复劳动。
+     *
+     * ⚠️ 分组项的 `link` 不会被用到（模板里父项是 `href="#"`），
+     *   但**仍要写** —— `transform()` 会给每个 item 算 active，
+     *   缺 link 的项可能在 active 判断里报错。
+     *
+     * 📍 跨插件的分组：父项由**本插件**注册，kokuu-exchange（积分兑换）
+     *    通过 `side_menu` 过滤器把自己**挪进**本父项的 children ——
+     *    而不是让 exchange 也去注册一个同名父项（那样会出现两个「积分中心」）。
+     *    这样 exchange 不需要知道分组的存在，各自只管自己的链接。
+     */
     \Illuminate\Support\Facades\Event::listen(\App\Events\ConfigureUserMenu::class, function ($event) {
         $event->menu['user'][] = [
-            'title' => '兑换码',
+            'title' => '积分中心',
             'link'  => 'plugin/kokuu-coupon',
-            'icon'  => 'fa-ticket',
+            'icon'  => 'fa-coins',
+            'children' => [
+                [
+                    'title' => '兑换码',
+                    'link'  => 'plugin/kokuu-coupon',
+                    'icon'  => 'fa-ticket',
+                ],
+                [
+                    'title' => '幸运抽奖',
+                    'link'  => 'plugin/kokuu-coupon/draw',
+                    'icon'  => 'fa-dice',
+                ],
+                [
+                    /* 占位：kokuu-exchange 的「积分兑换」由它自己用 side_menu
+                     * 过滤器插到这个位置（见下方）。这里先放一个标记项，
+                     * 交换插件会把自己替换进来；它没装时这个项自动消失。 */
+                    'title' => '__KOKUU_EXCHANGE_SLOT__',
+                    'link'  => 'plugin/kokuu-exchange',
+                    'icon'  => 'fa-exchange-alt',
+                ],
+            ],
         ];
+    });
+
+    /*
+     * 把占位项换成真正的「积分兑换」子项。
+     *
+     * 为什么用 `side_menu` 过滤器而不是直接在 ConfigureUserMenu 里加：
+     *   过滤器拿到的是**最终**菜单数组，能改已存在的结构；
+     *   ConfigureUserMenu 阶段三个插件的监听器顺序不保证，
+     *   谁先谁后不可控 → 会出现「分组在最后才建、插不进去」。
+     *
+     * ⚠️ side_menu 的回调签名是 ($menu, $type)：
+     *   `SideMenuComposer::compose()` 里是
+     *   `$filter->apply('side_menu', $menu, [$type])`
+     *   —— 第二个参数是菜单类型（'user'/'admin'/'explore'），不是数组。
+     */
+    app(\Blessing\Filter::class)->add('side_menu', function ($menu, $type) {
+        if ($type !== 'user' || ! is_array($menu)) {
+            return $menu;
+        }
+
+        $exchangeLink = 'plugin/kokuu-exchange';
+
+        foreach ($menu as $i => $item) {
+            if (! is_array($item) || empty($item['children'])) {
+                continue;
+            }
+            foreach ($item['children'] as $j => $child) {
+                if (is_array($child) && ($child['title'] ?? '') === '__KOKUU_EXCHANGE_SLOT__') {
+                    /*
+                     * ⚠️ 只有 kokuu-exchange **已启用**时才插这一项。
+                     *   插件没装/没启用时那个链接点过去就是 404 ——
+                     *   侧栏里挂死链比不挂更糟（用户会以为站点坏了）。
+                     *
+                     * 🔴 判据必须是 `PluginManager::getEnabledPlugins()`
+                     *   —— 这是内核 SideMenuComposer:82 自己用的写法。
+                     *
+                     *   踩过的两个坑（都不是猜的，是实测）：
+                     *   1. **没有 `Blessing\Plugin` 这个类**。
+                     *      真实类是 `App\Services\Plugin`，而 `Blessing\` 根本不在
+                     *      composer.json 的 psr-4 里 → `Class not found`。
+                     *   2. 即便用对类名也错：`Plugin::__construct(string $path, array $manifest)`
+                     *      要**两个参数**（路径 + manifest），不是传插件名。
+                     *      `isEnabled()` 只读对象自己的 `$enabled` 属性（默认 false），
+                     *      拿插件名 new 出来必然是 false → 子项永远不出现。
+                     *   两次错误叠在一起还被 `catch (\Throwable)` 吞掉，
+                     *   表现就是「代码看着对、子项就是不出来、零报错」。
+                     */
+                    $exchangeOn = false;
+                    try {
+                        $exchangeOn = resolve(\App\Services\PluginManager::class)
+                            ->getEnabledPlugins()
+                            ->contains(fn ($p) => $p->name === 'kokuu-exchange');
+                    } catch (\Throwable $e) {
+                        $exchangeOn = false;
+                    }
+
+                    if (! $exchangeOn) {
+                        unset($menu[$i]['children'][$j]);
+                        $menu[$i]['children'] = array_values($menu[$i]['children']);
+                        /* 子项被清空时父项也没意义了，整组摘掉 */
+                        if (! $menu[$i]['children']) {
+                            unset($menu[$i]);
+                            $menu = array_values($menu);
+                        }
+                        return $menu;
+                    }
+
+                    $menu[$i]['children'][$j] = [
+                        'title' => '积分兑换',
+                        'link'  => $exchangeLink,
+                        'icon'  => 'fa-exchange-alt',
+                    ];
+                    $menu[$i]['children'] = array_values($menu[$i]['children']);
+                    return $menu;
+                }
+            }
+        }
+
+        return $menu;
     });
     \Illuminate\Support\Facades\Event::listen(\App\Events\ConfigureAdminMenu::class, function ($event) {
         $event->menu['admin'][] = [
@@ -989,61 +1109,15 @@ return function ($plugin) {
         ];
     });
 
-    /* ---- 用户中心仪表盘：把「抽奖」挂成一个独立容器 ----
+    /* ---- 抽奖数据源（给独立页用） ----
      *
-     * ⚠️⚠️ 三个必须照做的点（都是踩过的）：
+     * 📍 这个函数原本喂的是 /user 仪表盘的 widget，现在只喂独立页
+     *   plugin/kokuu-coupon/draw。
      *
-     * 1. 用 `app(\Blessing\Filter::class)->add()`，**不是** Event::listen。
-     *    `grid:user.index` 是 Blessing\Filter 的钩子（内部走 `$filter->apply()`），
-     *    不是 Laravel 事件。用 Event::listen 挂不上去且**静默无效**。
-     *    且 Filter 无 facade、无 `app('filter')` 绑定，add() 是实例方法 ——
-     *    写成 `Filter::add(...)` 抛「Non-static method ... cannot be called
-     *    statically」，而 loadBootstrapper 的 catch(\Throwable){ report($th); }
-     *    **静默吞掉**它 → 表现为「插件装了但什么都不生效」，无报错、无 500。
-     *
-     * 2. 必须在传入的 $grid 上**增量改**，不能 return 一个全新数组。
-     *    这个钩子上挂了多个回调（本插件 / kokuu-credit / kokuu-forum），
-     *    是**链式**的：前一个的返回值是后一个的输入。
-     *    我第一版直接 return 新数组 → 社区卡被挪走、左边留一大片空白
-     *    （`class="col-"`，因为 layout 只有一行而 widgets 给了两行，
-     *      grid.twig 取 layout[1] 越界）。
-     *
-     * 3. 视图名用 **manifest 的 namespace 原值（双反斜杠）**：
-     *    'KokuuStudio\\KokuuCoupon::user.coupon.widget'
-     *    写短名会 500 且不提示正确名字。addNamespace() 是 merge 语义顶不掉，
-     *    覆盖要 replaceNamespace()（自己目录前插、原目录保留，丢了会 500）。
-     *
-     * 插右列 (0,1) **开头**：右列原本只有 kokuu-forum 的社区卡，
-     * 抽奖是互动内容，放开头与左列顶部的邮箱验证卡平齐，不挤左列。
+     * 函数名里的 "widget" 是历史遗留（v1.1 挂在仪表盘时起的），
+     * 改名会波及所有调用点，而它现在只服务一个页面 —— 保持原名，
+     * 在注释里说明清楚，别让下一个人以为是给仪表盘用的。
      */
-    app(\Blessing\Filter::class)->add('grid:user.index', function ($grid) {
-        $our = 'KokuuStudio\\KokuuCoupon::user.coupon.widget';
-
-        // ⚠️ 未登录时也要 return：grid 回调在 403 页也会跑，
-        //    数据函数对 null 用户只返回 ['canDraw' => false]，模板要能扛住。
-        View::share('kokuuCouponDraw', kokuu_coupon_draw_widget_data(auth()->user()));
-
-        /* widget 的 CSS/JS 挂在内核 Twig 布局的 head/footer 上。
-         * ⚠️ 这两个是 **Hook 的静态方法**（App\Services\Hook::addStyleFileToPage），
-         *    不是全局函数 —— 写裸函数名会
-         *    `Call to undefined function addStyleFileToPage()` 直接 500。
-         * ⚠️ 它们对 `view()->file()` 的**配置类页面完全无效**
-         *    （只写进内核 Twig 布局），所以：
-         *      · 管理页 manage.twig 必须**整页自包含**（已经这么做了）
-         *      · /user 是正常页面，钩子有效 → 这里注入是正解 */
-        Hook::addStyleFileToPage('/plugins/kokuu-coupon/assets/dash.css');
-        Hook::addScriptFileToPage('/plugins/kokuu-coupon/assets/dash.js');
-
-        if (! isset($grid['widgets'][0][1]) || ! is_array($grid['widgets'][0][1])) {
-            $grid['widgets'][0][1] = [];
-        }
-        if (! in_array($our, $grid['widgets'][0][1], true)) {
-            array_unshift($grid['widgets'][0][1], $our);
-        }
-
-        return $grid;
-    });
-
     Hook::addRoute(function ($router) use ($plugin) {
         /* ================= 用户：兑换 + 抽奖 ================= */
         // ⚠️ 内层闭包必须**再写一次** use ($plugin)：
@@ -1057,37 +1131,69 @@ return function ($plugin) {
 
             $uid     = (int) $user->uid;
             $balance = (int) DB::table('users')->where('uid', $uid)->value('score');
-            $cfg     = kokuu_coupon_config();
-            $draws   = kokuu_coupon_wallet_get($uid);
-            $cost    = (int) $cfg['draw_cost'];
-            $keep    = kokuu_coupon_min_keep();
+            /* ⚠️ cfg 仍要取：index.twig 用它渲染兑换码规则说明
+             *   （可兑换类型 / 单个兑换码能换多少积分 / 抽奖次数面额）。
+             *   抽奖的派生量不取，但**基础配置**不能省。
+             *   （精简本控制器时误删了这一行 → 500 Undefined variable $cfg） */
+            $cfg = kokuu_coupon_config();
 
-            /* ★ 派生量全在 PHP 侧算好：Twig 沙箱没有 max/min 过滤器。
-             *   「能不能抽」这个判断前端也要用，三处各算一次迟早漂移。 */
-            $spendable = max(0, $balance - $keep);
-            $canByCost = $cost > 0 && $spendable >= $cost;
-            $canDraw   = $draws > 0 || $canByCost;
-
+            /*
+             * ⚠️ 这个控制器**只服务兑换码**（用户原话：「普通用户的兑换码页面
+             *   里面不需要一套抽奖了，只需要有个输入兑换码的功能和兑换记录」）。
+             *
+             *   所以这里**不再算**抽奖的任何派生量（消耗/次数/冷却/概率/期望）——
+             *   它们都归抽奖独立页。留着不删的坏处是：改抽奖规则时这个页面
+             *   也会跟着算一遍，然后没人用它，纯误导。
+             *
+             *   kokuu_coupon_ensure_default_prizes() 仍要调：
+             *   兑换码可能兑换成「抽奖次数」（type='draw'），
+             *   奖品表没初始化的话那条路会缺配置。
+             */
             return view()->file($plugin->getPath() . '/views/user/coupon/index.twig', [
                 'cfg'       => $cfg,
                 'balance'   => $balance,
-                'keep'      => $keep,
-                'spendable' => $spendable,
-                'draws'     => $draws,
-                'drawCost'  => $cost,
-                'canByCost' => $canByCost,
-                'canDraw'   => $canDraw,
-                'cooldown'  => kokuu_coupon_draw_cooldown_left($uid),
-                'odds'      => kokuu_coupon_odds_table(),
+                /* myCodes 里的 type='draw' 行要留着 ——
+                   那是「用兑换码换到抽奖次数」的兑换结果，不是抽奖记录。 */
                 'myCodes'   => DB::table('coupon_redemptions')
                     ->where('uid', $uid)
                     ->orderByDesc('id')
                     ->limit(15)
                     ->get(),
-                'myDraws'   => DB::table('lottery_draws')
+            ]);
+        })->middleware(['web']);
+
+        /* ---- 抽奖页（独立页，从侧栏「积分中心」分组进入） ----
+         *
+         * 📍 这个功能搬过两次家（兑换码页 → 仪表盘 widget → 独立页），
+         *   用户反馈「位置不好，还是独立成一个页面放在侧栏吧」。
+         *
+         * ⚠️ 视图名用 **manifest 的 namespace 原值（双反斜杠）**：
+         *    'KokuuStudio\\KokuuCoupon::user.coupon.draw'
+         *    写短名会 500 且**不提示**正确名字。
+         *
+         * ⚠️ 资源用模板自己的 before_foot 块 link/script，**不用**
+         *    Hook::addStyleFileToPage —— 本页是 view()->file() 渲染的独立模板，
+         *    钩子对配置类页面无效（只写进内核 Twig 布局）。
+         *    （其实这里 view()->file() 渲染的模板仍 extends user.base.twig，
+         *      钩子其实有效；但模板自带更可靠，不依赖钩子被触发。）
+         */
+        $router->get('plugin/kokuu-coupon/draw', function (Request $request) use ($plugin) {
+            $user = $request->user();
+            abort_if (! $user, 403);
+
+            $data = kokuu_coupon_draw_widget_data($user);
+            $uid  = (int) $user->uid;
+
+            return view()->file($plugin->getPath() . '/views/user/coupon/draw.twig', [
+                'cfg'     => kokuu_coupon_config(),
+                /* 抽奖的派生量全在这里（次数/可用积分/消耗/冷却/概率/期望），
+                 * 模板只负责显示 —— Twig 沙箱没有 max/min 过滤器，
+                 * 「能不能抽」这类算术放模板里一律 500。 */
+                'draw'    => $data,
+                'myDraws' => DB::table('lottery_draws')
                     ->where('uid', $uid)
                     ->orderByDesc('id')
-                    ->limit(15)
+                    ->limit(20)
                     ->get(),
             ]);
         })->middleware(['web']);

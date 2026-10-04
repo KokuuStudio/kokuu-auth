@@ -1,0 +1,178 @@
+{% extends 'user.base.twig' %}
+
+{#
+  幸运抽奖（独立页）—— plugin/kokuu-coupon/draw
+
+  ————————————————————————————————————————————
+  ⚠️ twigbridge 的限制（写这个模板前必读）：
+  · 插件自定义的 kokuu_xxx() 函数在模板里**一律不可调用**（Twig 沙箱不放行）
+  · **没有 max / min 过滤器**（实测 |max 整页 500 Unknown "max" filter）
+    所以「能不能抽」「抽几次」「概率」全部在 PHP 侧算好传进来
+  · 可用 block 只有三个：title / content / before_foot
+    **没有 {% block scripts %}** → 资源必须放 before_foot
+
+  ⚠️ 别在这里再写 <h2>：内核 base 模板的 content-header 已用
+     {% block title %} 渲染了 <h1>。重复会出现两个标题。
+
+  ————————————————————————————————————————————
+  📍 这个功能搬过两次家，记住为什么：
+    v1.0  在兑换码页 plugin/kokuu-coupon 里（和兑换码混在一起）
+    v1.1  挪到仪表盘 /user 的 widget（col-md-5）
+    v1.2  ← 现在：独立页 + 侧栏「积分中心」分组入口
+
+  用户反馈：「新的抽奖功能的位置不好，还是独立成一个页面放在侧栏吧」，
+  以及「普通用户的兑换码页面里面不需要一套抽奖了」。
+
+  仪表盘 widget 的问题是：抽奖需要停留、看结果、查历史，
+  而仪表盘是「扫一眼就走」的地方，col-md-5 的窄容器放不下记录表。
+  抽奖次数的来源（兑换码）留在兑换码页，入口在侧栏分组里指过来。
+
+  ⚠️ 视图名必须用 manifest 的 namespace **原值（双反斜杠）**：
+     KokuuStudio\\KokuuCoupon::user.coupon.draw
+     写短名会 500 且**不提示**正确名字。
+#}
+
+{% block title %}幸运抽奖{% endblock %}
+
+{% block content %}
+<div class="container">
+  {# ---- 抽奖数据：控制器算好后传进来（key = draw）----
+     ⚠️ 用 `draw` 而不是 View::share 的全局键：share 不按页面隔离，
+        裸键会和其他插件/内核撞车，互相覆盖。 #}
+  {% set d = draw %}
+
+  <p class="help-text">
+    {% if d.cost > 0 %}
+      优先消耗抽奖次数；没有次数时每次扣除 <b>{{ d.cost }}</b> 积分
+      {% if d.keep > 0 %}，且积分至少保留 {{ d.keep }}{% endif %}。
+    {% else %}
+      当前仅可用抽奖次数抽奖。
+    {% endif %}
+    抽奖次数可以通过「兑换码」获得。
+  </p>
+
+  {# ---- 公告：后台可配，空则整块不渲染（别留空行） ---- #}
+  {% if d.notice %}
+    <div class="alert alert-info">{{ d.notice }}</div>
+  {% endif %}
+
+  {# ---- 我的抽奖账户：次数 / 可用积分 / 每次消耗 ---- #}
+  <div class="kcpDash">
+    <div class="kcpDash-head">
+      <span class="kcpDash-title">
+        <i class="fas fa-gift"></i> 我的抽奖账户
+      </span>
+    </div>
+
+    <div class="kcpDash-wallet">
+      <div class="kcpDash-wallet-item">
+        <span class="kcpDash-wallet-num">{{ d.draws }}</span>
+        <span class="kcpDash-wallet-label">抽奖次数</span>
+      </div>
+      <div class="kcpDash-wallet-item">
+        {# ⚠️ 这里是**可用积分**（余额 - 底仓），不是总余额。
+           抽完后 JS 用响应里的 j.spendable 回填，别拿 balance 填——
+           那会让「可用积分」显示成总余额，看着像抽奖没扣钱。 #}
+        <span class="kcpDash-wallet-num">{{ d.spendable }}</span>
+        <span class="kcpDash-wallet-label">可用积分</span>
+      </div>
+      {% if d.cost > 0 %}
+        <div class="kcpDash-wallet-item">
+          <span class="kcpDash-wallet-num">{{ d.cost }}</span>
+          <span class="kcpDash-wallet-label">每次消耗</span>
+        </div>
+      {% endif %}
+    </div>
+
+    {# ---- 抽奖按钮 ----
+       🔴 disabled 的 click() 被浏览器**静默忽略**（一个请求都不发）。
+          所以「次数与积分均不足」必须真 disabled，不能只靠 JS 拦。
+       data-url 由 PHP 侧算好传进来（Twig 里不拼 URL，避免 base 假设）。 #}
+    <button type="button" class="kcpDash-btn" id="kcp-draw-btn"
+            data-url="{{ d.drawUrl }}"
+            {% if not d.canDraw or d.cooldown > 0 %}disabled{% endif %}>
+      <i class="fas fa-dice"></i>
+      <span id="kcp-draw-btn-text">
+        {% if d.cooldown > 0 %}
+          冷却中（{{ d.cooldown }}s）
+        {% elseif d.canDraw %}
+          立即抽奖
+        {% else %}
+          次数与积分均不足
+        {% endif %}
+      </span>
+    </button>
+
+    {# ---- 抽奖结果：抽奖后由 JS 填 ---- #}
+    <div class="kcpDash-result" id="kcp-draw-result" hidden></div>
+  </div>
+
+  {# ---- 概率公示 ----
+     独立页是主入口，所以从 widget 里的「折叠」改成**默认展开**——
+     抽奖前看清楚概率是基本信任要求，藏在折叠里等于没有。 #}
+  <div class="kcpDash">
+    <div class="kcpDash-head">
+      <span class="kcpDash-title">
+        <i class="fas fa-chart-pie"></i> 中奖概率
+      </span>
+      <span class="kcpDash-notice">单抽期望 {{ d.expect }} 积分</span>
+    </div>
+    <ul class="kcpDash-odds-list">
+      {% for r in d.odds %}
+        <li>
+          <span class="kcpDash-odds-label">{{ r.label }}</span>
+          <span class="kcpDash-odds-pct">{{ r.pct }}%</span>
+          <span class="kcpDash-odds-amt">+{{ r.amount }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  {# ---- 我的抽奖记录：完整列表（widget 容器里只放得下最近 5 条） ---- #}
+  <div class="cp-card">
+    <div class="cp-label">我的抽奖记录</div>
+    {% if myDraws is empty %}
+      <p class="help-text">还没有抽过奖。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>时间</th><th>奖品</th><th>积分</th><th>消耗</th></tr></thead>
+        <tbody>
+          {% for r in myDraws %}
+            <tr>
+              <td>{{ r.created_at }}</td>
+              <td>{{ r.prize_label }}</td>
+              <td>{{ r.amount }}</td>
+              <td>{% if r.via == 'code' %}次数{% else %}积分{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{#
+  资源放 before_foot —— 内核 base 模板唯一的资源注入点（没有 block scripts）
+#}
+{% block before_foot %}
+{#
+  ⚠️ 资源名跟路由名对齐（draw.*），dash.* 已于 v1.2 改名并从服务器删除。
+     这里若还写 dash.css，页面会静默 404 掉样式（结构还在、就是没样式），
+     属于最难自查的一类问题 —— 守卫必须断言真实 href。
+#}
+<link rel="stylesheet" href="{{ url('/plugins/kokuu-coupon/assets/draw.css') }}">
+
+{#
+  ⚠️ CSRF：路由挂了 web 中间件（含 VerifyCsrfToken），
+     不带 X-XSRF-TOKEN 一律 419。值取自 XSRF-TOKEN cookie，
+     只 decodeURIComponent，**不要剥前缀**（Laravel 服务端会自己剥）。
+#}
+<script>
+  window.KCP_CSRF = (function () {
+    var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  })();
+</script>
+<script src="{{ url('/plugins/kokuu-coupon/assets/draw.js') }}"></script>
+{% endblock %}

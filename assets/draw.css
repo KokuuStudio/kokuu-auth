@@ -1,4 +1,7 @@
-/* kokuu-coupon —— 用户中心「幸运抽奖」widget 专用样式
+/* kokuu-coupon —— 幸运抽奖（独立页 plugin/kokuu-coupon/draw）样式
+ *
+ * 📍 原为仪表盘 widget 的样式（dash.css），功能搬到独立页后改名 draw.css。
+ *    类名 kcpDash-* **保持不变** —— CSS 选择器与守卫断言都按它写的。
  *
  * ⚠️⚠️ 为什么这份 CSS 完全自带变量、不引用 kokuu-ui/apple.css：
  *   1. apple.css 的作用域是 body.kokuu-apple.*，而这个类**只有后台页面**有
