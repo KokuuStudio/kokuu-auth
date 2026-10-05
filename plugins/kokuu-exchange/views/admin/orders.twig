@@ -1,0 +1,170 @@
+{% extends 'user.base.twig' %}
+
+{#
+  管理员：兑换订单管理 + 配置
+  资源注入点见 user/exchange/index.twig 的注释（只有 before_foot 可用）。
+#}
+
+{% block title %}兑换管理{% endblock %}
+
+{% block content %}
+<div class="container">
+  {# admin/base.twig 的 content-header 已用 block('title') 渲染 <h1>兑换管理</h1>，
+     这里再写一遍会出现两个标题。 #}
+
+  {# ===== 概览 ===== #}
+  <div class="ex-stats">
+    <div class="ex-stat">
+      <div class="ex-stat-num">{{ stats.total }}</div>
+      <div class="ex-stat-label">总订单</div>
+    </div>
+    <div class="ex-stat">
+      <div class="ex-stat-num">{{ stats.done }}</div>
+      <div class="ex-stat-label">已到账</div>
+    </div>
+    <div class="ex-stat">
+      <div class="ex-stat-num">{{ stats.pending }}</div>
+      <div class="ex-stat-label">待发放</div>
+    </div>
+    <div class="ex-stat">
+      <div class="ex-stat-num">{{ stats.failed }}</div>
+      <div class="ex-stat-label">失败</div>
+    </div>
+    <div class="ex-stat">
+      <div class="ex-stat-num">{{ stats.units }}</div>
+      <div class="ex-stat-label">累计发放货币</div>
+    </div>
+    <div class="ex-stat">
+      <div class="ex-stat-num">{{ stats.cost }}</div>
+      <div class="ex-stat-label">累计消耗积分</div>
+    </div>
+  </div>
+
+  {# ===== 配置 ===== #}
+  <h3 class="ex-h3">兑换配置</h3>
+  <form method="post" action="{{ url('/plugin/kokuu-exchange/settings') }}" class="ex-card">
+    <input type="hidden" name="_token" value="{{ csrf_token() }}">
+
+    <div class="ex-form-grid">
+      <div>
+        <label class="ex-label" for="s-cost">每单位消耗积分</label>
+        <input type="number" id="s-cost" name="cost_per_unit" class="form-control" min="1" value="{{ cfg.cost_per_unit }}">
+        <p class="help-text">例如填 100，则 100 积分 = 1 单位货币</p>
+      </div>
+      <div>
+        <label class="ex-label" for="s-min">单次最少</label>
+        <input type="number" id="s-min" name="min_units" class="form-control" min="1" value="{{ cfg.min_units }}">
+      </div>
+      <div>
+        <label class="ex-label" for="s-max">单次最多（0=不限）</label>
+        <input type="number" id="s-max" name="max_units" class="form-control" min="0" value="{{ cfg.max_units }}">
+      </div>
+      <div>
+        <label class="ex-label" for="s-cd">冷却秒数（0=无）</label>
+        <input type="number" id="s-cd" name="cooldown" class="form-control" min="0" value="{{ cfg.cooldown }}">
+      </div>
+      <div>
+        <label class="ex-label" for="s-day">每日上限（0=不限）</label>
+        <input type="number" id="s-day" name="daily_limit" class="form-control" min="0" value="{{ cfg.daily_limit }}">
+      </div>
+      <div>
+        <label class="ex-label" for="s-keep">兑换后保留积分</label>
+        <input type="number" id="s-keep" name="min_keep" class="form-control" min="0" value="{{ cfg.min_keep }}">
+        <p class="help-text">兑换后至少留下这么多积分，扣不到底仓。设 0 = 不保留</p>
+      </div>
+      <div>
+        <label class="ex-label" for="s-ttl">订单有效期秒数</label>
+        <input type="number" id="s-ttl" name="order_ttl" class="form-control" min="0" value="{{ cfg.order_ttl }}">
+        <p class="help-text">超期未发放自动退积分。设 0 = 关闭（不推荐）</p>
+      </div>
+      <div>
+        <label class="ex-label" for="s-q">发放队列 Key</label>
+        <input type="text" id="s-q" name="queue_key" class="form-control" value="{{ cfg.queue_key }}">
+      </div>
+      <div>
+        <label class="ex-label" for="s-r">结果队列 Key</label>
+        <input type="text" id="s-r" name="result_key" class="form-control" value="{{ cfg.result_key }}">
+        <p class="help-text">这两项要与 MC 端 KokuuBridge 的配置一致</p>
+      </div>
+    </div>
+
+    <label class="ex-check">
+      <input type="checkbox" name="auto_refund" value="1" {% if cfg.auto_refund %}checked{% endif %}>
+      发放失败时自动退还积分
+    </label>
+    <p class="help-text">关闭后失败订单需手动退款，积分会一直被扣着。</p>
+
+    <label class="ex-label" for="s-note">公告（显示在兑换页顶部）</label>
+    <input type="text" id="s-note" name="notice" class="form-control" value="{{ cfg.notice }}"
+           placeholder="留空不显示，例如：新增兑换比例说明">
+
+    <button class="Button Button--primary ex-submit">保存配置</button>
+  </form>
+
+  {# ===== 订单列表 ===== #}
+  <h3 class="ex-h3">最近 100 笔订单</h3>
+  <div class="ex-table-wrap">
+    <table class="table ex-table">
+      <thead>
+        <tr>
+          <th>订单号</th>
+          <th>UID</th>
+          <th>角色</th>
+          <th class="ex-num">数量</th>
+          <th class="ex-num">积分</th>
+          <th>状态</th>
+          <th>时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr>
+            <td><code>{{ o.order_no }}</code></td>
+            <td>{{ o.uid }}</td>
+            <td>{{ o.player_name }}</td>
+            <td class="ex-num">{{ o.units }}</td>
+            <td class="ex-num">-{{ o.cost }}</td>
+            <td>
+              {% if o.status == 'pending' %}
+                <span class="ex-badge ex-badge-pending">发放中</span>
+              {% elseif o.status == 'done' %}
+                <span class="ex-badge ex-badge-done">已到账</span>
+              {% elseif o.status == 'failed' %}
+                <span class="ex-badge ex-badge-failed">失败</span>
+                {% if o.fail_reason %}<div class="ex-reason">{{ o.fail_reason }}</div>{% endif %}
+              {% elseif o.status == 'refunded' %}
+                <span class="ex-badge ex-badge-refunded">已退款</span>
+              {% else %}
+                <span class="ex-badge">{{ o.status }}</span>
+              {% endif %}
+            </td>
+            <td class="ex-time">{{ o.created_at }}</td>
+            <td>
+              {% if o.status != 'done' and not o.refunded %}
+                <form method="post" action="{{ url('/plugin/kokuu-exchange/refund') }}"
+                      onsubmit="return confirm('确认给订单 {{ o.order_no }} 退还 {{ o.cost }} 积分？');">
+                  <input type="hidden" name="_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="id" value="{{ o.id }}">
+                  <button class="Button Button--danger Button--small" type="submit">退款</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="8" class="ex-empty">还没有订单</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="help-text">
+    发放中超过有效期会自动退回积分。若玩家反馈「已到账但仍显示发放中」，
+    让他刷新页面即可（结果队列由页面访问时消费）。
+  </p>
+</div>
+{% endblock %}
+
+{% block before_foot %}
+<link rel="stylesheet" href="{{ url('/plugins/kokuu-exchange/assets/exchange.css') }}">
+{% endblock %}
