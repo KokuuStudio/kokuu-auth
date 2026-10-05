@@ -1,0 +1,142 @@
+{% extends 'user.base.twig' %}
+
+{#
+  兑换码（kokuu-coupon 用户页）
+
+  ————————————————————————————————————————————
+  ⚠️ twigbridge 的限制（写这个模板前必读）：
+  · 只有 trans() / url() / auth_user() / config() 等桥接函数，**没有 t()**
+  · 插件自定义的 kokuu_xxx() 函数在模板里**一律不可调用**
+  · **没有 max / min 过滤器**（实测 |max 整页 500 Unknown "max" filter）
+    所以派生量全部在控制器（PHP）算好传进来，模板只负责显示。
+  · 可用 block 只有三个：title / content / before_foot
+    **没有 {% block scripts %}** → 资源必须放 before_foot
+
+  ⚠️ 别在这里再写 <h2>：内核 base 模板的 content-header 已用
+     {% block title %} 渲染了 <h1>。重复会出现两个标题。
+  ⚠️ help-text 里不要用 Markdown 的 **加粗** —— Twig 不渲染 Markdown，
+     星号会原样显示给用户。
+
+  ————————————————————————————————————————————
+  ⚠️ **本页只有兑换码，没有抽奖**（用户原话：
+     「普通用户的兑换码页面里面不需要一套抽奖了，
+       只需要有个输入兑换码的功能和兑换记录功能就可以了」）
+
+  抽奖已移到独立页 `plugin/kokuu-coupon/draw`，从侧栏「积分中心」分组进入。
+  之前这里有两套抽奖 UI（页面内一套+ 仪表盘 widget 一套），
+  同一个后端接口两个入口，属于重复劳动 —— 现在只保留独立页那一套。
+
+  所以本模板里**没有**：抽奖按钮、概率表、抽奖冷却提示、「我的抽奖记录」表。
+  兑换记录表仍会显示 type='draw' 的行（用兑换码换来的抽奖次数），
+  那是**兑换码的兑换结果**，不属于抽奖功能，别连它一起删了。
+#}
+
+{% block title %}兑换码{% endblock %}
+
+{% block content %}
+<div class="container">
+  <p class="help-text">
+    输入管理员发放的兑换码，可以直接获得<b>积分</b>，或获得<b>抽奖次数</b>。
+    抽奖请到「积分中心 → 幸运抽奖」。
+  </p>
+
+  {# ===== 余额概览 ===== #}
+  {#只留「当前积分」一格：抽奖次数与期望值都属抽奖，已移走。 #}
+  <div class="cp-hero">
+    <div class="cp-hero-col">
+      <div class="cp-hero-num" id="cp-balance">{{ balance }}</div>
+      <div class="cp-hero-label">当前积分</div>
+    </div>
+  </div>
+
+  {% if cfg.notice %}
+    <div class="alert alert-info">{{ cfg.notice }}</div>
+  {% endif %}
+
+  {# ===== 兑换码表单 ===== #}
+  <div class="cp-card">
+    <label class="cp-label" for="cp-code">兑换码</label>
+    <div class="cp-code-row">
+      <input type="text" id="cp-code" class="form-control" placeholder="例如 KOKUUXXXXXXXX"
+             autocomplete="off" spellcheck="false" maxlength="64">
+      {# 🔴 v1.3 去掉 `Button Button--primary`：
+         那是我之前臆造的 class 名，**全站任何 CSS 里都没有定义**
+         （grep 过：只在 4 个插件模板里出现，没有任何 css 匹配）。
+         结果按钮就是浏览器默认外观 —— 白底灰边深灰字，
+         跟整站青绿色调完全不搭，也就是用户说的「兑换按钮非常丑」。
+         现在样式全在 coupon.css 的 .cp-redeem 里，颜色走 --a-* 变量。
+         **插件自己的按钮一律自带完整样式，别指望内核 class。** #}
+      <button type="button" id="cp-redeem" class="cp-redeem">兑换</button>
+    </div>
+    <p class="help-text" id="cp-code-hint">
+      {% if cfg.daily_redeem_limit > 0 %}
+        兑换码不区分大小写。今日最多可兑换 {{ cfg.daily_redeem_limit }} 个。
+      {% else %}
+        兑换码不区分大小写。
+      {% endif %}
+    </p>
+
+    {# ===== 兑换结果提示 =====
+       🔴 这个元素**不能删**。coupon.js:42 取的就是它
+          （var elResult = $('cp-result')），而 say() 开头是
+          `if (!elResult) { return; }` —— 元素不在，say() 静默 return，
+          **兑换成功/失败的所有提示都不显示**，而请求其实发出去了。
+          症状：点「兑换」按钮毫无反应，也不报错。
+          （本轮删抽奖时误删，是 coupon_cdp_guard 的 resHidden=null 抓出来的。）
+
+          放在表单卡内、提示文案**下面** —— 提示文案是常驻说明，
+          结果条是**这次操作**的反馈，两者上下相邻最自然。
+          初始 hidden，由 JS 填内容后取消。 #}
+    <div class="cp-result" id="cp-result" hidden></div>
+  </div>
+
+  {# ===== 我的兑换记录 ===== #}
+  {#⚠️ 含 type == 'draw' 的行：那是用兑换码换来的抽奖次数，
+     属于「兑换码的兑换结果」，不是抽奖记录，别因为删抽奖而一起删。 #}
+  <div class="cp-card">
+    <div class="cp-label">我的兑换记录</div>
+    {% if myCodes is empty %}
+      <p class="help-text">还没有兑换过。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>时间</th><th>类型</th><th>获得</th></tr></thead>
+        <tbody>
+          {% for r in myCodes %}
+            <tr>
+              <td>{{ r.created_at }}</td>
+              <td>{% if r.type == 'draw' %}抽奖次数{% else %}积分{% endif %}</td>
+              <td>{{ r.value }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{#
+  资源放 before_foot —— 内核 base 模板唯一的资源注入点（没有 block scripts）
+#}
+{% block before_foot %}
+<link rel="stylesheet" href="{{ url('/plugins/kokuu-coupon/assets/coupon.css') }}">
+
+{#
+  ⚠️ CSRF：路由挂了 web 中间件（含 VerifyCsrfToken），
+     不带 X-XSRF-TOKEN 一律 419「CSRF token mismatch.」。
+     值取自 XSRF-TOKEN cookie —— Laravel 写它时用了 CookieValuePrefix 前缀，
+     所以 JS 这边**只 decodeURIComponent，不要剥前缀**。
+
+  ⚠️ 这里**只注入兑换码要用的**。抽奖的常量（消耗/次数/冷却）
+     在抽奖页 separately 注入 —— 一个页面的 JS 全局不跨页，
+     注入过去也只是让 window 上多几个没人读的死变量。
+#}
+<script>
+  window.CPN_URL_REDEEM = "{{ url('/plugin/kokuu-coupon/redeem') }}";
+  window.CPN_CSRF = (function () {
+    var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  })();
+</script>
+<script src="{{ url('/plugins/kokuu-coupon/assets/coupon.js') }}"></script>
+{% endblock %}

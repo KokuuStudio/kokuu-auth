@@ -1,0 +1,562 @@
+{#
+  兑换码管理页（kokuu-coupon / plugin/kokuu-coupon/manage）
+
+  ————————————————————————————————————————————
+  ⚠️⚠️ 这页是 `view()->file()` 渲染的**独立页面，不进布局继承链**：
+  1. `addStyleFileToPage` / `addScriptFileToPage` 对它**完全无效**
+     （那两个钩子只写进内核 Twig 布局）。
+     → 必须**整页自包含**：自己 <link> 内核 style + 本页 css，JS 全内联。
+  2. 不能 @extends 任何东西（admin._base 在全站**不存在**，写了直接 500）。
+  3. 背景是**浅色**底 —— 别用只适合深色的表格配色。
+
+  ⚠️ Twig 沙箱没有 max/min 过滤器：所有统计与概率都在 PHP 侧算好传进来。
+#}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# ⚠️ csrf_token() 在 twig 沙箱不可用；本页面所有 POST 走 cookie 里的
+     XSRF-TOKEN + X-XSRF-TOKEN header，不依赖这个 meta。 #}
+  <title>兑换码管理 · KokuuSkin</title>
+  {# ⚠️ 内核 AdminLTE 的 CSS **文件名带 hash**，不是 /css/app.css：
+     public/ 下只有 app/style.249be0b.css（还有 181/home-css/spectre 等），
+     `public/css/` 目录压根不存在 → 写 /css/app.css 是 404，页面只靠
+     coupon.css 撑着（无 AdminLTE 基础样式，AdminLTE 类名全部失效，
+       但症状隐蔽：能渲染、零报错，只是配色/间距不对）。
+     正解见 resources/views/assets/style.twig：`{{ cdn_base }}/app/style.*.css`。
+     cdn_base 是全局变量，配置页虽然不进布局链，但**能拿到全局 share 的变量**。
+     ⚠️ 别写死文件名（hash 会随内核升级变）—— 升级时要核对这个路径。 #}
+  <link rel="stylesheet" href="{{ cdn_base }}/app/style.249be0b.css">
+  <link rel="stylesheet" href="{{ url('/plugins/kokuu-ui/assets/apple.css') }}">
+  <link rel="stylesheet" href="{{ url('/plugins/kokuu-coupon/assets/coupon.css') }}">
+  <style>
+    /* 自包含兜底：万 apple.css 没加载上，页面也别塌成一坨。
+       同时补上 AdminLTE 基础类里本页真正用到的几个（Button/form-control），
+       避免 style.*.css 加载失败时按钮和输入框完全没样式。 */
+    body { background: #f5f5f7; padding: 18px; font-family: -apple-system, "PingFang SC", sans-serif; }
+    .cp-wrap { max-width: 1080px; margin: 0 auto; }
+    .cp-page-title { font-size: 22px; font-weight: 700; margin: 0 0 4px; color: #1c1c1e; }
+    .cp-page-sub { color: #626c7e; font-size: 13px; margin: 0 0 20px; }
+    /* 表格底色写死浅色：管理页不跟随深色（内核 admin 也是浅底） */
+    .cp-table { background: #fff; border-radius: 12px; }
+    .cp-table th { color: #626c7e; }
+    .cp-table td { color: #1c1c1e; }
+    .cp-card { background: #fff; }
+    .cp-stat { background: #f5f5f7; }
+    /* AdminLTE 兜底：Button / form-control / label */
+    .Button { display: inline-block; padding: 6px 14px; border: 1px solid #ced4da;
+      border-radius: 6px; background: #fff; color: #1c1c1e; font-size: 14px; cursor: pointer; }
+    .Button--primary { background: #0aa2c0; border-color: #0aa2c0; color: #fff; }
+    .Button:disabled { opacity: .55; cursor: not-allowed; }
+    .form-control { display: block; width: 100%; padding: 6px 10px; font-size: 14px;
+      color: #1c1c1e; background: #fff; border: 1px solid #ced4da; border-radius: 6px; }
+    label { display: block; font-size: 13px; color: #626c7e; margin-bottom: 4px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body class="hold-transition sidebar-mini">
+<div class="cp-wrap">
+
+  <h1 class="cp-page-title">兑换码管理</h1>
+  <p class="cp-page-sub">
+    批量生成兑换码（可直接给积分，或给抽奖机会），并配置抽奖奖品与概率。
+  </p>
+
+  {# ===== 统计 ===== #}
+  <div class="cp-stat-row">
+    <div class="cp-stat">
+      <div class="cp-stat-num">{{ stats.codes }}</div>
+      <div class="cp-stat-label">兑换码总数</div>
+    </div>
+    <div class="cp-stat">
+      <div class="cp-stat-num">{{ stats.codes_used }}</div>
+      <div class="cp-stat-label">已被使用</div>
+    </div>
+    <div class="cp-stat">
+      <div class="cp-stat-num">{{ stats.credit_given }}</div>
+      <div class="cp-stat-label">已发放积分</div>
+    </div>
+    <div class="cp-stat">
+      <div class="cp-stat-num">{{ stats.draws_given }}</div>
+      <div class="cp-stat-label">已发放抽奖次数</div>
+    </div>
+    <div class="cp-stat">
+      <div class="cp-stat-num">{{ stats.draws_used }}</div>
+      <div class="cp-stat-label">抽奖次数已用</div>
+    </div>
+    <div class="cp-stat">
+      <div class="cp-stat-num">{{ stats.draw_amount }}</div>
+      <div class="cp-stat-label">抽奖发出积分</div>
+    </div>
+  </div>
+
+  {# ===== 抽奖设置（消耗与规则）=====
+     放在「批量生成」之前：消耗设置是前提，
+     管理员先定「一次抽多少积分」再去生成发积分的码，顺序才顺。
+     ⚠️ 底仓（minKeep）**不在这里**——它与「积分兑换」插件共用同一个设置，
+        在那边改一次两边同时生效，硬塞进本页会造成两个真相源。 #}
+  <div class="cp-card">
+    <span class="cp-label">抽奖设置</span>
+    <p class="help-text">
+      用户在<strong>用户中心仪表盘</strong>的「幸运抽奖」卡片里抽奖。
+      有抽奖次数时优先用次数；没有次数时按下面的「每次消耗积分」扣分。
+      抽奖至少要保留 <b>{{ minKeep }}</b> 积分（与积分兑换插件共用同一设置）。
+    </p>
+    <div class="cp-admin-row">
+      <div class="cp-admin-field">
+        <label for="c-draw-cost">每次消耗积分</label>
+        <input type="number" id="c-draw-cost" class="form-control"
+               value="{{ cfg.draw_cost }}" min="0" max="1000000">
+      </div>
+      <div class="cp-admin-field">
+        <label for="c-draw-cooldown">冷却（秒）</label>
+        <input type="number" id="c-draw-cooldown" class="form-control"
+               value="{{ cfg.draw_cooldown }}" min="0" max="86400">
+      </div>
+      <div class="cp-admin-field">
+        <label for="c-daily-limit">每日上限（0=不限）</label>
+        <input type="number" id="c-daily-limit" class="form-control"
+               value="{{ cfg.daily_draw_limit }}" min="0" max="100000">
+      </div>
+      <div class="cp-admin-field" style="flex:2">
+        <label for="c-notice">抽奖公告（留空不显示）</label>
+        <input type="text" id="c-notice" class="form-control"
+               value="{{ cfg.notice }}" maxlength="200"
+               placeholder="如：每天签到送抽奖机会">
+      </div>
+      <button type="button" id="c-save" class="Button Button--primary">保存设置</button>
+    </div>
+    <div id="c-result" class="cp-result" hidden></div>
+  </div>
+
+  {# ===== 批量生成 ===== #}
+  <div class="cp-card">
+    <span class="cp-label">批量生成兑换码</span>
+    <div class="cp-admin-row">
+      <div class="cp-admin-field">
+        <label for="g-count">数量</label>
+        <input type="number" id="g-count" class="form-control" value="10" min="1" max="500">
+      </div>
+      <div class="cp-admin-field">
+        <label for="g-type">类型</label>
+        <select id="g-type" class="form-control">
+          <option value="credit">直接给积分</option>
+          <option value="draw">给抽奖次数</option>
+        </select>
+      </div>
+      <div class="cp-admin-field">
+        <label for="g-value" id="g-value-label">积分数量</label>
+        <input type="number" id="g-value" class="form-control" value="100" min="1">
+      </div>
+      <div class="cp-admin-field">
+        <label for="g-ttl">有效期（天，0=永久）</label>
+        <input type="number" id="g-ttl" class="form-control" value="0" min="0">
+      </div>
+      <div class="cp-admin-field" style="flex:1">
+        <label for="g-note">备注</label>
+        <input type="text" id="g-note" class="form-control" placeholder="如：直播活动">
+      </div>
+      <button type="button" id="g-go" class="Button Button--primary">生成</button>
+    </div>
+    <div id="g-result" class="cp-result" hidden></div>
+
+    {# 生成成功后展示本批次的码，支持一键复制 #}
+    <div id="g-list-wrap" hidden style="margin-top:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span class="cp-label" style="margin:0">本批兑换码（批次 <span class="cp-mono" id="g-batch"></span>）</span>
+        <button type="button" id="g-copy" class="Button Button--normal">复制全部</button>
+      </div>
+      <div id="g-list" class="cp-mono" style="line-height:2;word-break:break-all"></div>
+    </div>
+  </div>
+
+  {# ===== 奖品配置 ===== #}
+  <div class="cp-card">
+    <span class="cp-label">抽奖奖品与概率</span>
+    <p class="help-text">
+      权重决定概率占比（不需要自己算百分比，页面会显示）。
+      当前总权重 <b id="p-totalweight">{{ odds.totalWeight }}</b>，单抽期望
+      <b id="p-expect">{{ odds.expect }}</b> 积分。
+      {# ⚠️ 期望值是**权重加权**的 Σ(amount×weight)/Σweight，
+         不是所有奖品金额的算术平均（那个会虚高好几倍）。
+         页面带 id 是为了让守卫能读到数并交叉验证 —— 见 ops/coupon_admin_guard.js。 #}
+    </p>
+    <table class="cp-table" id="p-table">
+      <thead>
+        <tr><th>奖品名</th><th>积分</th><th>权重</th><th>概率</th><th>排序</th><th>启用</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for p in prizes %}
+          <tr>
+            <td><input type="text" class="form-control p-label" value="{{ p.label }}"></td>
+            <td><input type="number" class="form-control p-amount" value="{{ p.amount }}" min="0" style="width:90px"></td>
+            <td><input type="number" class="form-control p-weight" value="{{ p.weight }}" min="0" style="width:90px"></td>
+            <td class="cp-pct">-</td>
+            <td><input type="number" class="form-control p-sort" value="{{ p.sort }}" style="width:70px"></td>
+            <td style="text-align:center">
+              <input type="checkbox" class="p-enabled" {% if p.enabled %}checked{% endif %}>
+            </td>
+            <td><button type="button" class="Button Button--primary p-save" data-id="{{ p.id }}">保存</button></td>
+          </tr>
+        {% endfor %}
+        <tr>
+          <td><input type="text" class="form-control p-label" placeholder="新奖品名"></td>
+          <td><input type="number" class="form-control p-amount" value="0" min="0" style="width:90px"></td>
+          <td><input type="number" class="form-control p-weight" value="10" min="0" style="width:90px"></td>
+          <td>-</td>
+          <td><input type="number" class="form-control p-sort" value="0" style="width:70px"></td>
+          <td style="text-align:center"><input type="checkbox" class="p-enabled" checked></td>
+          <td><button type="button" class="Button Button--primary p-save" data-id="0">添加</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div id="p-result" class="cp-result" hidden></div>
+  </div>
+
+  {# ===== 本批次兑换码 ===== #}
+  <div class="cp-card">
+    <span class="cp-label">
+      {% if batch %}批次 {{ batch }} 的兑换码（{{ codes|length }} 个）{% else %}兑换码（选择一个批次查看）{% endif %}
+    </span>
+    {% if codes is empty %}
+      <p class="help-text">{% if batch %}该批次没有兑换码。{% else %}生成后会自动显示在这里。{% endif %}</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>兑换码</th><th>类型</th><th>面值</th><th>备注</th><th>已用</th><th>过期</th><th>状态</th><th></th></tr></thead>
+        <tbody>
+          {% for c in codes %}
+            <tr>
+              <td class="cp-mono">{{ c.code }}</td>
+              <td>{% if c.type == 'draw' %}抽奖次数{% else %}积分{% endif %}</td>
+              <td>{{ c.value }}</td>
+              <td>{{ c.note }}</td>
+              <td>{{ c.used_count }}</td>
+              <td>{{ c.expires_at or '永久' }}</td>
+              <td>{% if c.disabled %}已停用{% else %}启用{% endif %}</td>
+              <td><button type="button" class="Button Button--normal c-toggle" data-id="{{ c.id }}">切换</button></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+
+  {# ===== 最近兑换 ===== #}
+  <div class="cp-card">
+    <span class="cp-label">最近兑换记录</span>
+    {% if recent is empty %}
+      <p class="help-text">还没有人兑换。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>ID</th><th>用户</th><th>类型</th><th>面值</th><th>时间</th></tr></thead>
+        <tbody>
+          {% for r in recent %}
+            <tr>
+              <td>{{ r.id }}</td>
+              <td>{{ r.uid }}</td>
+              <td>{% if r.type == 'draw' %}抽奖次数{% else %}积分{% endif %}</td>
+              <td>{{ r.value }}</td>
+              <td>{{ r.created_at }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+
+  {# ===== 最近抽奖 ===== #}
+  <div class="cp-card">
+    <span class="cp-label">最近抽奖记录</span>
+    {% if draws is empty %}
+      <p class="help-text">还没有人抽奖。</p>
+    {% else %}
+      <table class="cp-table">
+        <thead><tr><th>用户</th><th>奖品</th><th>积分</th><th>消耗</th><th>时间</th></tr></thead>
+        <tbody>
+          {% for r in draws %}
+            <tr>
+              <td>{{ r.uid }}</td>
+              <td>{{ r.prize_label }}</td>
+              <td>{{ r.amount }}</td>
+              <td>{% if r.via == 'code' %}次数{% else %}积分{% endif %}</td>
+              <td>{{ r.created_at }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+
+  <p class="help-text">
+    抽奖后至少保留的积分底仓与「积分兑换」插件共用同一个设置
+    （当前 {{ minKeep }}）—— 在积分兑换后台改一次，两边同时生效。
+  </p>
+</div>
+
+<script>
+  /* ⚠️ CSRF：本页所有 POST 都要带。
+     值取自 XSRF-TOKEN cookie，只 decodeURIComponent，不要剥前缀。 */
+  window.CPN_ADMIN = {
+    genUrl:   "{{ url('/plugin/kokuu-coupon/generate') }}",
+    prizeUrl: "{{ url('/plugin/kokuu-coupon/prize') }}",
+    toggleUrl:"{{ url('/plugin/kokuu-coupon/toggle') }}",
+    configUrl:"{{ url('/plugin/kokuu-coupon/config') }}",
+    manageUrl:"{{ url('/plugin/kokuu-coupon/manage') }}",
+    /* 守卫用：本页不引用它，但 ops/coupon_admin_guard.js 会读 */
+    purgeUrl: "{{ url('/plugin/kokuu-coupon/purge-testdata') }}"
+  };
+  window.CPN_CSRF = (function () {
+    var m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  })();
+  /* 底仓值从别处读不到，这里由模板内联 */
+  window.CPN_MIN_KEEP = {{ minKeep }};
+</script>
+<script>
+(function () {
+  'use strict';
+  var A = window.CPN_ADMIN;
+
+  function readCookie(name) {
+    var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  function say(el, text, kind) {
+    if (!el) { return; }
+    el.hidden = false;
+    el.className = 'cp-result ' + (kind || 'info');
+    el.textContent = text;
+  }
+
+  function post(url, fields) {
+    var body = new URLSearchParams();
+    Object.keys(fields).forEach(function (k) { body.set(k, String(fields[k])); });
+    return fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') || window.CPN_CSRF
+      },
+      body: body.toString()
+    }).then(function (r) {
+      /* 419 = CSRF 拦截（响应是 HTML 不是 JSON），单独翻译 */
+      if (r.status === 419) {
+        return { code: 1, message: '登录状态已过期，请刷新页面后重试' };
+      }
+      return r.json().catch(function () {
+        return { code: 1, message: '服务器返回异常（HTTP ' + r.status + '）' };
+      });
+    });
+  }
+
+  /* ---- 类型切换时改标签文案 ---- */
+  var gType = document.getElementById('g-type');
+  var gValLabel = document.getElementById('g-value-label');
+  var gValue = document.getElementById('g-value');
+  if (gType && gValLabel && gValue) {
+    var syncType = function () {
+      var isDraw = gType.value === 'draw';
+      gValLabel.textContent = isDraw ? '抽奖次数' : '积分数量';
+      gValue.value = isDraw ? 1 : 100;
+    };
+    gType.addEventListener('change', syncType);
+    syncType();
+  }
+
+  /* ---- 批量生成 ---- */
+  var gGo = document.getElementById('g-go');
+  if (gGo) {
+    gGo.addEventListener('click', function () {
+      var el = document.getElementById('g-result');
+      gGo.disabled = true;
+      say(el, '生成中…', 'info');
+      post(A.genUrl, {
+        count:    document.getElementById('g-count').value,
+        type:     gType.value,
+        value:    document.getElementById('g-value').value,
+        note:     document.getElementById('g-note').value,
+        ttl_days: document.getElementById('g-ttl').value
+      }).then(function (j) {
+        gGo.disabled = false;
+        if (j && j.code === 0) {
+          say(el, j.message, 'ok');
+          document.getElementById('g-batch').textContent = j.batch || '';
+          var list = document.getElementById('g-list');
+          list.textContent = '';
+          (j.codes || []).forEach(function (c) {
+            var line = document.createElement('div');
+            line.textContent = c;
+            list.appendChild(line);
+          });
+          document.getElementById('g-list-wrap').hidden = false;
+        } else {
+          say(el, (j && j.message) || '生成失败', 'err');
+        }
+      }).catch(function (e) {
+        gGo.disabled = false;
+        say(el, '网络错误：' + e.message, 'err');
+      });
+    });
+  }
+
+  /* ---- 复制全部 ---- */
+  var gCopy = document.getElementById('g-copy');
+  if (gCopy) {
+    gCopy.addEventListener('click', function () {
+      var text = (document.getElementById('g-list').innerText || '').trim();
+      if (!text) { return; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+        gCopy.textContent = '已复制';
+      } else {
+        gCopy.textContent = '请手动复制';
+      }
+      setTimeout(function () { gCopy.textContent = '复制全部'; }, 1500);
+    });
+  }
+
+  /* ---- 概率列随输入实时重算（纯展示，算术在 JS 里做一遍即可，
+         权威数据在 PHP 侧的 kokuu_coupon_odds_table）---- */
+  var pTable = document.getElementById('p-table');
+  function recalc() {
+    if (!pTable) { return; }
+    var rows = pTable.querySelectorAll('tbody tr');
+    var total = 0;
+    rows.forEach(function (tr) {
+      var w = tr.querySelector('.p-weight');
+      var en = tr.querySelector('.p-enabled');
+      if (w && en && en.checked) { total += parseInt(w.value, 10) || 0; }
+    });
+    /* ⚠️ 期望值必须和概率列**同步**重算。
+       之前只重算了概率列，p-expect 还是服务端渲染的旧值 ——
+       改完权重后「单抽期望」显示的是改之前的数（概率列已变、期望没变），
+       管理员会被误导。权威值仍在 PHP 侧，这里只做展示层同步。 */
+    var weighted = 0;
+    rows.forEach(function (tr) {
+      var w = tr.querySelector('.p-weight');
+      var en = tr.querySelector('.p-enabled');
+      var a = tr.querySelector('.p-amount');
+      if (w && en && en.checked) {
+        weighted += (parseInt(a ? a.value : 0, 10) || 0) * (parseInt(w.value, 10) || 0);
+      }
+    });
+    var pExpect = document.getElementById('p-expect');
+    if (pExpect) {
+      pExpect.textContent = total > 0 ? (weighted / total).toFixed(2) : '0.00';
+    }
+    rows.forEach(function (tr) {
+      var w = tr.querySelector('.p-weight');
+      var en = tr.querySelector('.p-enabled');
+      var pct = tr.querySelector('.cp-pct');
+      if (!pct) { return; }
+      var on = !en || en.checked;
+      var v = w ? (parseInt(w.value, 10) || 0) : 0;
+      pct.textContent = (on && total > 0) ? (v * 100 / total).toFixed(2) + '%' : '-';
+    });
+  }
+  if (pTable) {
+    pTable.addEventListener('input', recalc);
+    recalc();
+  }
+
+  /* ---- 奖品保存 ---- */
+  var pResult = document.getElementById('p-result');
+  document.querySelectorAll('.p-save').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var tr = btn.closest('tr');
+      btn.disabled = true;
+      post(A.prizeUrl, {
+        id:      btn.getAttribute('data-id') || 0,
+        label:   tr.querySelector('.p-label').value,
+        amount:  tr.querySelector('.p-amount').value,
+        weight:  tr.querySelector('.p-weight').value,
+        sort:    tr.querySelector('.p-sort').value,
+        enabled: tr.querySelector('.p-enabled').checked ? 1 : 0
+      }).then(function (j) {
+        btn.disabled = false;
+        if (j && j.code === 0) {
+          say(pResult, j.message + '（刷新后生效）', 'ok');
+        } else {
+          say(pResult, (j && j.message) || '保存失败', 'err');
+        }
+      }).catch(function (e) {
+        btn.disabled = false;
+        say(pResult, '网络错误：' + e.message, 'err');
+      });
+    });
+  });
+
+  /* ---- 抽奖设置保存 ----
+   * ⚠️ 值用字符串原样发（不 parseInt）：服务端要能区分
+   *   「空字符串」与「0」—— 前者可能是管理员清空，后者是真要 0。
+   *   自己先转数字会把 '007' 变成 7，也分不清 '0' 和 ''。 */
+  var cSave = document.getElementById('c-save');
+  if (cSave) {
+    cSave.addEventListener('click', function () {
+      var cResult = document.getElementById('c-result');
+      var payload = {
+        draw_cost:        document.getElementById('c-draw-cost').value,
+        draw_cooldown:    document.getElementById('c-draw-cooldown').value,
+        daily_draw_limit: document.getElementById('c-daily-limit').value,
+        notice:           document.getElementById('c-notice').value
+      };
+      /* 🔴 数字项空值 = 想清空？服务端会因 !is_numeric 报 422。
+         *   这里先给一句本地提示，省得用户点了才看到错误。 */
+      var numKeys = ['draw_cost', 'draw_cooldown', 'daily_draw_limit'];
+      for (var i = 0; i < numKeys.length; i++) {
+        if (String(payload[numKeys[i]]).trim() === '') {
+          /* 统一走 say()：它会设 className='cp-result err'，
+             手写 class 容易和 coupon.css 里的 .cp-result-err 对不上
+             （那个类并不存在，样式全是 .cp-result.ok / .cp-result.err）。 */
+          say(cResult, '数字项不能留空（要设为不限就填 0）', 'err');
+          return;
+        }
+      }
+
+      cSave.disabled = true;
+      post(A.configUrl, payload).then(function (j) {
+        cSave.disabled = false;
+        if (j && j.code === 0) {
+          /* 用服务端**回显**的值回填，而不是管理员输入的字符串。
+             服务端做了类型转换（'007' → 7），回填后看到的才是真实落库值。 */
+          if (j.saved) {
+            Object.keys(j.saved).forEach(function (k) {
+              var el = { draw_cost: 'c-draw-cost', draw_cooldown: 'c-draw-cooldown',
+                         daily_draw_limit: 'c-daily-limit', notice: 'c-notice' }[k];
+              if (el) { document.getElementById(el).value = j.saved[k]; }
+            });
+          }
+          say(cResult, j.message + '　' + (j.hint || ''), 'ok');
+        } else {
+          say(cResult, (j && j.message) || '保存失败', 'err');
+        }
+      }).catch(function (e) {
+        cSave.disabled = false;
+        say(cResult, '网络错误：' + e.message, 'err');
+      });
+    });
+  }
+
+  /* ---- 停用/启用兑换码 ---- */
+  document.querySelectorAll('.c-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      post(A.toggleUrl, { id: btn.getAttribute('data-id') }).then(function (j) {
+        if (j && j.code === 0) {
+          location.href = A.manageUrl + '?batch=' + encodeURIComponent(
+            (document.getElementById('g-batch') || {}).textContent || '');
+        } else {
+          btn.disabled = false;
+          alert((j && j.message) || '操作失败');
+        }
+      }).catch(function () { btn.disabled = false; });
+    });
+  });
+})();
+</script>
+</body>
+</html>

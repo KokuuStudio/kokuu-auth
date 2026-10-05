@@ -1,0 +1,756 @@
+/* kokuu-coupon —— 幸运抽奖独立页（plugin/kokuu-coupon/draw）v1.3
+ *
+ * ══════════════════════════════════════════════════════════════
+ * 📍 这个文件改过一版（v1.2），而那一版是**坏的**，记下来别重犯：
+ *
+ *   v1.2 把抽奖从仪表盘 widget 搬到独立页时，只改了模板、没改样式逻辑。
+ *   而原样式是给「AdminLTE 卡片里的 widget」写的：
+ *     · .kcpDash 只声明了 --kcp-* 变量，**从没把变量用在自己身上**
+ *       （没有 background / border / padding / box-shadow）
+ *     · 白底、圆角、边框全是外层 <section class="box"> 提供的
+ *   搬到独立页后外层没了 → 容器变成
+ *     background: transparent; border: 0; padding: 0
+ *   页面上就是「一堆文字直接贴在灰底上」，也就是用户说的
+ *   「排版挤在一起、非常乱」。**不是配色问题，是外壳没了。**
+ *
+ *   v1.3 的教训：**容器样式必须自带**，不能依赖「外面会有人套壳」。
+ *   下次再把组件搬到独立页，先 grep 它原来的父级提供了什么。
+ * ══════════════════════════════════════════════════════════════
+ *
+ * ── 设计取向 ────────────────────────────────────────────────
+ * 用户要的是「像二次元手游抽卡那样的页面」：一个池子 + 一个按钮。
+ * 所以这里的策略是**减法**：
+ *   · 视觉主体 = 深色卡池（与站点浅色调形成对比 → 更聚焦）
+ *   · 信息 = 只留次数/可用积分/消耗一行/结果/最近 8 条
+ *   · 概率表已按用户要求移除（v1.3）
+ *
+ * ── 配色 ────────────────────────────────────────────────────
+ * 深色是**局部**的：只有 .kcpPool 及其内部是深色，外面仍跟随站点。
+ * 这样既拿到「卡面」的聚焦感，又不会让整页在暗色站点下突兀。
+ * 变量都带 fallback —— 跟 coupon.css 的 --a-* 一样，
+ * 变量缺失时退化成可读的默认值，而不是「什么都没有」。
+ */
+
+.kcpStage {
+  /* 变量作用域挂在这一层，避免污染页面其他部分 */
+  --kcp-ink:        #f4f6fb;
+  --kcp-ink-2:      rgba(244, 246, 251, .68);
+  --kcp-deep-1:     #1b2350;
+  --kcp-deep-2:     #2e1f52;
+  --kcp-deep-3:     #4a2a63;
+  --kcp-gold:       #ffd479;
+  --kcp-cyan:       #6ee7f0;
+  --kcp-surface:    #ffffff;
+  --kcp-fg:         #1c1c1e;
+  --kcp-fg-2:       #626c7e;
+  --kcp-sep:        rgba(0, 0, 0, .08);
+  --kcp-radius:     20px;
+
+  /* 整页宽度收窄：卡池不该横跨整个 1280px，要「一张卡」的尺度 */
+  max-width: 460px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+}
+
+/* ══════════════════════ 卡池 ══════════════════════ */
+
+.kcpPool {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--kcp-radius);
+  padding: 40px 24px 28px;
+  text-align: center;
+  color: var(--kcp-ink);
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--kcp-deep-3) 0%, transparent 60%),
+    linear-gradient(165deg, var(--kcp-deep-1) 0%, var(--kcp-deep-2) 100%);
+  box-shadow: 0 18px 44px rgba(27, 35, 80, .28);
+  isolation: isolate;
+}
+
+/* 底部一道金线，给「卡面」一点贵气 */
+.kcpPool::after {
+  content: '';
+  position: absolute;
+  left: 22px; right: 22px; bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--kcp-gold), transparent);
+  opacity: .55;
+}
+
+/* ---- 中央光晕：呼吸感靠它 ---- */
+.kcpPool-glow {
+  position: absolute;
+  top: -40px; left: 50%;
+  width: 240px; height: 240px;
+  margin-left: -120px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 212, 121, .34) 0%, transparent 68%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---- 星点：纯 CSS 渐变，不用图片、不用 JS ---- */
+.kcpPool-stars {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: .5;
+  background-image:
+    radial-gradient(1.4px 1.4px at 20% 18%,  #fff, transparent),
+    radial-gradient(1.2px 1.2px at 68% 12%,  #fff, transparent),
+    radial-gradient(1.6px 1.6px at 84% 34%,  #fff, transparent),
+    radial-gradient(1.2px 1.2px at 38% 42%,  #fff, transparent),
+    radial-gradient(1.4px 1.4px at 12% 58%,  #fff, transparent),
+    radial-gradient(1.2px 1.2px at 78% 66%,  #fff, transparent),
+    radial-gradient(1.5px 1.5px at 46% 82%,  #fff, transparent),
+    radial-gradient(1.2px 1.2px at 30% 92%,  #fff, transparent),
+    radial-gradient(1.3px 1.3px at 88% 88%,  #fff, transparent);
+}
+
+/* ---- 奖杯 ---- */
+.kcpPool-mark {
+  position: relative;
+  z-index: 1;
+  width: 104px; height: 104px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, .04));
+  border: 1px solid rgba(255, 255, 255, .26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .30);
+}
+.kcpPool-mark i {
+  font-size: 42px;
+  color: var(--kcp-gold);
+  text-shadow: 0 0 22px rgba(255, 212, 121, .55);
+}
+
+.kcpPool-title {
+  position: relative;
+  z-index: 1;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--kcp-ink);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+}
+
+/* ---- 次数 / 可用积分 ---- */
+.kcpPool-nums {
+  position: relative;
+  z-index: 1;
+  margin-top: 18px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 4px;
+}
+.kcpNum {
+  flex: 0 1 132px;
+  min-width: 0;
+  padding: 9px 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .09);
+  border: 1px solid rgba(255, 255, 255, .10);
+}
+.kcpNum-v {
+  display: block;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--kcp-ink);
+  /* 等宽数字：抽奖后数字变化不会让卡片宽度跳动 */
+  font-variant-numeric: tabular-nums;
+}
+.kcpNum-l {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--kcp-ink-2);
+}
+.kcpPool-div {
+  align-self: center;
+  width: 1px;
+  margin: 0 12px;
+  background: rgba(255, 255, 255, .16);
+}
+
+/* ---- 可抽时：金色描边 + 呼吸；不可抽：压暗 ---- */
+.kcpPool.is-ready {
+  box-shadow: 0 18px 44px rgba(27, 35, 80, .28),
+              0 0 0 1px rgba(255, 212, 121, .34);
+}
+.kcpPool.is-ready .kcpPool-glow {
+  animation: kcpBreath 3.4s ease-in-out infinite;
+}
+@keyframes kcpBreath {
+  0%, 100% { opacity: .75; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.07); }
+}
+.kcpPool:not(.is-ready) { filter: saturate(.72); }
+
+/* ---- 抽中时的光爆：JS 加 .is-hit ---- */
+.kcpPool.is-hit::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: radial-gradient(circle at 50% 32%,
+              rgba(255, 236, 190, .92) 0%, rgba(255, 212, 121, .38) 34%, transparent 68%);
+  animation: kcpFlash .72s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes kcpFlash {
+  0%   { opacity: 0; }
+  22%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ══════════════════════ 按钮 ══════════════════════ */
+
+.kcpGo {
+  display: block;
+  width: 100%;
+  margin-top: 22px;
+  padding: 15px 20px;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 6px;
+  text-indent: 6px;              /* 抵掉 letter-spacing 造成的右侧空隙 */
+  color: #4a2a05;
+  background: linear-gradient(180deg, #ffe3a3 0%, var(--kcp-gold) 100%);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(255, 212, 121, .30);
+  transition: filter .18s ease, box-shadow .18s ease;
+  /* 只用 filter/阴影做反馈，**不碰 transform**：
+     会创建层叠上下文，页面里若有下拉菜单 z-index 会出不去（CSS 铁律 3）。 */
+}
+.kcpGo:hover:not(:disabled) {
+  filter: brightness(1.05);
+  box-shadow: 0 11px 28px rgba(255, 212, 121, .42);
+}
+.kcpGo:active:not(:disabled) { filter: brightness(.97); }
+.kcpGo:focus-visible {
+  outline: 2px solid var(--kcp-cyan);
+  outline-offset: 3px;
+}
+.kcpGo:disabled {
+  background: rgba(0, 0, 0, .07);
+  color: var(--kcp-fg-2);
+  box-shadow: none;
+  cursor: not-allowed;
+  letter-spacing: 2px;
+  text-indent: 2px;
+}
+.kcpGo.is-busy { filter: brightness(.92); cursor: progress; }
+
+/* ══════════════════════ 消耗说明 ══════════════════════ */
+
+.kcpCost {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+  color: var(--kcp-fg-2);
+}
+.kcpCost b { color: var(--kcp-fg); font-weight: 700; }
+
+/* ══════════════════════ 结果 ══════════════════════ */
+
+.kcpResult {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: center;
+  color: var(--kcp-fg);
+  background: var(--kcp-surface, #fff);
+  border: 1px solid var(--kcp-sep, rgba(0, 0, 0, .08));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .05);
+}
+/* 中奖态：绿。⚠️ 涨=红不适用于「奖品」——奖品是收获不是行情。 */
+.kcpResult.is-win {
+  border-color: rgba(16, 185, 129, .40);
+  background: rgba(16, 185, 129, .10);
+}
+.kcpResult.is-warn {
+  border-color: rgba(217, 119, 6, .36);
+  background: rgba(217, 119, 6, .09);
+}
+.kcpResult-name { font-weight: 700; }
+.kcpResult-amount {
+  font-size: 20px;
+  font-weight: 800;
+  color: #10b981;
+  font-variant-numeric: tabular-nums;
+}
+.kcpResult.is-warn .kcpResult-amount { color: #d97706; }
+
+/* ══════════════════════ 最近抽奖 ══════════════════════ */
+
+.kcpHistory {
+  margin-top: 24px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--kcp-surface, #fff);
+  border: 1px solid var(--kcp-sep, rgba(0, 0, 0, .08));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .05);
+}
+.kcpHistory-h {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--kcp-fg);
+  margin-bottom: 8px;
+}
+.kcpHistory-list { list-style: none; margin: 0; padding: 0; }
+/* v1.4 空态：一条记录都没有时的提示。
+   字号对齐 .kcpHistory-list li（13px），颜色**只走变量、不写死 fallback** ——
+   写死 #8a94a6 会和 :root 里 --kcp-fg-2(#626c7e) 变成两个真相源，
+   暗色模式也只翻变量，写死的值会留在亮色下。 */
+.kcpHistory-empty {
+  padding: 7px 0;
+  font-size: 13px;
+  color: var(--kcp-fg-2);
+}
+.kcpHistory-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px dashed var(--kcp-sep, rgba(0, 0, 0, .08));
+  font-size: 13px;
+}
+.kcpHistory-list li:first-child { border-top: none; }
+.kcpHistory-l {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--kcp-fg);
+}
+.kcpHistory-a {
+  flex: 0 0 auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #10b981;
+}
+
+/* ══════════════════════ 暗色站点 ══════════════════════
+ * 卡池本身已是深色，**不用**跟着翻。
+ * 只把外围的结果/历史卡面换成暗色，否则会出现「深色池 + 亮白卡」的割裂。 */
+body.dark-mode .kcpStage,
+body.skin-dark .kcpStage {
+  --kcp-surface: #1e2229;
+  --kcp-fg:      #e8eaed;
+  --kcp-fg-2:    #9aa3b2;
+  --kcp-sep:     rgba(255, 255, 255, .10);
+}
+body.dark-mode .kcpGo:disabled,
+body.skin-dark .kcpGo:disabled {
+  background: rgba(255, 255, 255, .08);
+  color: var(--kcp-fg-2);
+}
+body.dark-mode .kcpResult.is-win,
+body.skin-dark .kcpResult.is-win {
+  border-color: rgba(16, 185, 129, .40);
+  background: rgba(16, 185, 129, .14);
+}
+body.dark-mode .kcpResult.is-warn,
+body.skin-dark .kcpResult.is-warn {
+  border-color: rgba(217, 119, 6, .40);
+  background: rgba(217, 119, 6, .14);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   🎬 未中奖态（.is-miss）
+   抓帧实测发现的问题：奖品池里有一档是「谢谢参与 / +0 积分」，
+   但它照样放金光柱、四向星芒、还写「+0 积分」——
+   **给一个 0 分的奖品打聚光灯，是最别扭的一种庆祝**。
+   原神抽卡同理：没有出货就不会出金光。
+
+   所以未中奖时：光柱、星芒、核心全灭，只留冷调的夜空 + 灰色文字。
+   🔴 判据是 **amount === 0**，不是 label 里有没有「谢谢」——
+     「谢谢参与」「未中奖」「再接再厉」都是管理员自填的文案，
+     靠字符串猜等于把文案约定写死。amount 是数字，稳。
+   ══════════════════════════════════════════════════════════════ */
+.kcpAnim.is-miss .kcpAnim-core,
+.kcpAnim.is-miss .kcpAnim-core::before { animation: none; opacity: 0; }
+.kcpAnim.is-miss .kcpRay               { animation: none; opacity: 0; }
+.kcpAnim.is-miss .kcpRing              { opacity: .22; box-shadow: none;
+                                         border-color: rgba(180, 200, 230, .40); }
+.kcpAnim.is-miss .kcpAnim-name {
+  color: #d5e2f5;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, .5);
+}
+.kcpAnim.is-miss .kcpAnim-amt { color: #9fb3cf; }
+.kcpAnim.is-miss .kcpAnim-amt::before {
+  background: linear-gradient(90deg,
+              rgba(180, 200, 230, 0) 0%,
+              rgba(180, 200, 230, .70) 50%,
+              rgba(180, 200, 230, 0) 100%);
+}
+
+/* ══════════════════════ 窄屏 ══════════════════════ */
+
+@media (max-width: 480px) {
+  .kcpStage { max-width: 100%; }
+  .kcpPool  { padding: 32px 16px 24px; border-radius: 16px; }
+  .kcpPool-mark { width: 88px; height: 88px; }
+  .kcpPool-mark i { font-size: 36px; }
+  .kcpNum   { flex: 0 1 118px; }
+  .kcpNum-v { font-size: 21px; }
+  .kcpPool-div { margin: 0 8px; }
+  .kcpGo    { font-size: 16px; letter-spacing: 4px; text-indent: 4px; }
+}
+
+@media (max-width: 340px) {
+  .kcpNum   { flex: 1 1 auto; }
+  .kcpPool-div { display: none; }   /* 太窄时去掉分隔线，宁可挤也别换行 */
+}
+
+/* ---- 尊重「减少动态效果」的系统设置 ---- */
+@media (prefers-reduced-motion: reduce) {
+  .kcpPool.is-ready .kcpPool-glow { animation: none; }
+  .kcpPool.is-hit::before         { animation: none; opacity: 0; }
+  .kcpGo { transition: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   🎬 抽卡动画层（v1.4）
+   用户原话：「能不能做成原神空月之歌版本领月卡，哥伦比亚那个抽奖的动画」
+   → 要的是**抽中那一下的仪式感**：夜空 + 流星划落 + 金环扩散 +
+     星芒爆闪 + 奖品大字浮现。
+
+   为什么全用 CSS 画、不放图片/视频素材：
+     · 没有版权干净的抽卡序列帧素材
+     · 纯 CSS 自适应任意屏幕，不会拉伸、不会加载失败
+     · 体积只有几 KB
+
+   时序（总长 2.9s，由 JS 在 2.9s 后收层）：
+     0.00 ─ 0.34  夜空淡入
+     0.05 ─ 0.90  三道流星先后划落（错峰 delay）
+     0.40 ─ 1.45  三圈金环由中心扩张淡出（错峰 delay）
+     0.95 ─ 2.85  核心光球脉动 + 顶部光柱
+     1.05 ─ 1.55  四向星芒爆闪
+     1.35 ─ 2.90  奖品名模糊→清晰浮现，最后淡出
+
+   🔴 关键：基础态（没有 .is-on）下所有子元素 opacity 必须是 0。
+      JS 只加/摘 .is-on 来控制播放，摘掉就回到「什么都不显示」，
+      不需要逐个子元素清理 class。
+   🔴 覆盖层是 position:fixed; inset:0，播放期间会吃掉整页点击 ——
+      这是**有意的**：避免动画期间误触。
+      代价是 JS 必须在 2.9s 后准时收层，否则页面会一直点不动。
+      守卫（coupon_pages_guard）会实测这一点。
+   ══════════════════════════════════════════════════════════════ */
+
+.kcpAnim {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;                /* 高于 AdminLTE 的 1038 侧栏 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* opacity:0 是「已挂载但未播放」的兜底，
+     真正决定显不显示的是下面这条 [hidden]。 */
+  opacity: 0;
+}
+/* 🔴 .kcpAnim 的 display:flex 和 [hidden] 的 display:none 同为 0,1,0，
+   源序靠后赢 → 必须显式写这条，否则覆盖层会一直挡住整页点击。 */
+.kcpAnim[hidden] { display: none; }
+.kcpAnim.is-on   { animation: kcpSkyFade .34s ease-out both; }
+
+@keyframes kcpSkyFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ---- 夜空（最后 24% 淡出，与 JS 的 2.9s 收层对齐）---- */
+.kcpAnim-sky {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background:
+    /* 月华：顶部偏中的冷光 */
+    radial-gradient(78% 46% at 50% 4%,  rgba(126, 186, 255, .34) 0%, rgba(126, 186, 255, 0) 62%),
+    /* 星云余晖：右上一抹青紫 */
+    radial-gradient(52% 40% at 84% 22%, rgba(124, 92, 255, .26) 0%, rgba(124, 92, 255, 0) 68%),
+    /* 底部暖金：预告「奖品」 */
+    radial-gradient(64% 42% at 50% 108%, rgba(255, 198, 108, .28) 0%, rgba(255, 198, 108, 0) 70%),
+    linear-gradient(180deg, #1d3a6e 0%, #14264d 42%, #0a1430 74%, #050a1c 100%);
+  animation: kcpSky 2.9s ease-in-out both;
+}
+@keyframes kcpSky {
+  0%   { opacity: 0; }
+  12%  { opacity: 1; }
+  76%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ---- 流星 ---- */
+.kcpAnim-meteors {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.kcpMeteor {
+  --dx: 640px;
+  --dy: 340px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 210px;
+  height: 2px;
+  border-radius: 2px;
+  opacity: 0;
+  transform: rotate(34deg);      /* 静态倾角（不用 translate 属性避免与动画打架） */
+  background: linear-gradient(90deg,
+              rgba(255, 255, 255, 0) 0%,
+              rgba(186, 220, 255, .55) 62%,
+              rgba(255, 255, 255, .98) 100%);
+  filter: drop-shadow(0 0 7px rgba(150, 200, 255, .85));
+  animation: kcpMeteorFly var(--dur, .72s) var(--delay, 0s)
+             cubic-bezier(.32, .04, .52, 1) both;
+}
+.kcpMeteor-1 { --dx: 700px; --dy: 380px; --delay: .05s; --dur: .68s; top: 6%;  left: 4%; }
+.kcpMeteor-2 { --dx: 560px; --dy: 300px; --delay: .26s; --dur: .80s; top: 13%; left: 30%; }
+.kcpMeteor-3 { --dx: 620px; --dy: 420px; --delay: .14s; --dur: .62s; top: 3%;  left: 58%; }
+
+@keyframes kcpMeteorFly {
+  0%   { opacity: 0;   translate: 0 0; }
+  12%  { opacity: 1; }
+  66%  { opacity: 1; }
+  100% { opacity: 0;   translate: var(--dx) var(--dy); }
+}
+
+/* ---- 爆闪区（光环 / 星芒 / 核心 共用中心点）---- */
+.kcpAnim-burst {
+  position: absolute;
+  left: 50%;
+  top: 46%;                      /* 略高于正中：下方要给奖品名留位置 */
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* 金环：0.18 → 2.9 倍扩张 */
+.kcpAnim-rings { position: absolute; left: 0; top: 0; }
+.kcpRing {
+  --rdur: 1.02s;
+  --rdelay: .40s;
+  position: absolute;
+  left: -66px;
+  top: -66px;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 228, 168, .92);
+  box-shadow:
+    0 0 20px rgba(255, 216, 132, .50),
+    inset 0 0 20px rgba(255, 216, 132, .30);
+  opacity: 0;
+  animation: kcpRingOut var(--rdur) var(--rdelay)
+             cubic-bezier(.15, .72, .30, 1) both;
+}
+.kcpRing-1 { --rdelay: .40s; }
+.kcpRing-2 { --rdelay: .58s; --rdur: 1.10s; border-color: rgba(180, 222, 255, .85);
+             box-shadow: 0 0 20px rgba(150, 200, 255, .45), inset 0 0 20px rgba(150, 200, 255, .26); }
+.kcpRing-3 { --rdelay: .76s; --rdur: 1.18s; }
+
+@keyframes kcpRingOut {
+  0%   { opacity: 0;   scale: .18; }
+  16%  { opacity: 1; }
+  100% { opacity: 0;   scale: 2.9; }
+}
+
+/* 四向星芒：4 根细长条各转一个角度，交叉成八芒 */
+.kcpAnim-star { position: absolute; left: 0; top: 0; }
+.kcpRay {
+  position: absolute;
+  left: -150px;
+  top: -1.5px;
+  width: 300px;
+  height: 3px;
+  border-radius: 3px;
+  opacity: 0;
+  background: linear-gradient(90deg,
+              rgba(255, 255, 255, 0) 0%,
+              rgba(255, 240, 200, .92) 50%,
+              rgba(255, 255, 255, 0) 100%);
+  filter: drop-shadow(0 0 8px rgba(255, 224, 150, .90));
+  animation: kcpRayFlash .52s var(--rdelay, 1.05s) cubic-bezier(.2, .8, .3, 1) both;
+}
+.kcpRay-1 { --rdelay: 1.05s; transform: rotate(0deg); }
+.kcpRay-2 { --rdelay: 1.11s; transform: rotate(45deg); }
+.kcpRay-3 { --rdelay: 1.17s; transform: rotate(90deg); }
+.kcpRay-4 { --rdelay: 1.23s; transform: rotate(135deg); }
+
+@keyframes kcpRayFlash {
+  0%   { opacity: 0;   scale: .18; }
+  22%  { opacity: 1;   scale: 1.10; }
+  46%  { opacity: .88; scale: 1; }
+  100% { opacity: 0;   scale: 1.32; }
+}
+
+/* 核心光球 + 顶部光柱 */
+.kcpAnim-core {
+  position: absolute;
+  left: -52px;
+  top: -52px;
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  opacity: 0;
+  background: radial-gradient(circle,
+              #ffffff 0%,
+              #fff2cf 22%,
+              rgba(255, 208, 112, .50) 50%,
+              rgba(255, 196, 80, 0) 76%);
+  animation: kcpCorePulse 1.90s .95s cubic-bezier(.2, .7, .3, 1) both;
+}
+/* 顶部光柱：用 ::before 拉一条竖直的柔光，模仿神像垂下的那道光 */
+.kcpAnim-core::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 62%;
+  width: 26px;
+  height: 78vh;
+  margin-left: -13px;
+  background: linear-gradient(180deg,
+              rgba(255, 238, 200, 0) 0%,
+              rgba(255, 238, 200, .34) 62%,
+              rgba(255, 246, 226, .62) 100%);
+  filter: blur(5px);
+  opacity: 0;
+  animation: kcpBeam 1.90s .95s ease-out both;
+}
+@keyframes kcpBeam {
+  0%   { opacity: 0;  scale: .55 .2; }
+  20%  { opacity: 1;  scale: 1 1; }
+  72%  { opacity: .9; scale: 1 1; }
+  100% { opacity: 0;  scale: 1 1.2; }
+}
+@keyframes kcpCorePulse {
+  0%   { opacity: 0;   scale: .22; }
+  12%  { opacity: 1;   scale: 1.22; }
+  28%  { opacity: .96; scale: .92; }
+  68%  { opacity: .82; scale: 1; }
+  100% { opacity: 0;   scale: 1.75; }
+}
+
+/* ---- 奖品名（模仿抽卡结果的大字居中）----
+   🔴 v1.4 抓帧实测修的：原来这里是 flex 居中（center ≈ top:50%），
+   而 burst 中心在 top:46% —— 两者只差 4%，奖品名**正好压在核心光球上**，
+   1500ms 那帧文字糊在白光里完全不可读。
+   现在把奖品名绝对定位到 burst 下方，两者彻底分离。 */
+.kcpAnim-label {
+  position: absolute;
+  left: 50%;
+  top: 72%;
+  z-index: 3;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: 88vw;
+  padding: 0 20px;
+  text-align: center;
+  opacity: 0;
+  animation: kcpLabelIn 1.55s 1.35s cubic-bezier(.2, .8, .25, 1) both;
+}
+.kcpAnim-name {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.28;
+  letter-spacing: 2px;
+  color: #fff6dd;
+  text-shadow:
+    0 0 18px rgba(255, 214, 130, .85),
+    0 2px 10px rgba(0, 0, 0, .55);
+}
+.kcpAnim-amt {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #ffd98a;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, .55);
+}
+/* 奖品名上方一道金色分隔短线，纯粹是为了让两行字不悬空。
+   🔴 JS 判到「奖品名已含金额」或「未中奖」时会把这一行置空，
+      所以必须 :empty 兜住，否则会剩一条无主的短线悬在字下面。 */
+.kcpAnim-amt::before {
+  content: '';
+  display: block;
+  width: 46px;
+  height: 2px;
+  margin: 0 auto 10px;
+  border-radius: 2px;
+  background: linear-gradient(90deg,
+              rgba(255, 216, 132, 0) 0%,
+              rgba(255, 216, 132, .95) 50%,
+              rgba(255, 216, 132, 0) 100%);
+}
+.kcpAnim-amt:empty { display: none; }
+.kcpAnim-amt:empty::before { content: none; }
+
+@keyframes kcpLabelIn {
+  0%   { opacity: 0; translate: 0 16px; filter: blur(7px); }
+  30%  { opacity: 1; translate: 0 0;    filter: blur(0); }
+  72%  { opacity: 1; translate: 0 0;    filter: blur(0); }
+  100% { opacity: 0; translate: 0 -10px; filter: blur(2px); }
+}
+
+/* ---- 动画态下的窄屏微调 ---- */
+@media (max-width: 480px) {
+  .kcpAnim-burst { top: 42%; }
+  .kcpAnim-label { top: 66%; }   /* 窄屏矮，光球小，名字往上提一点更居中 */
+  .kcpRing  { left: -50px; top: -50px; width: 100px; height: 100px; }
+  .kcpRay   { left: -110px; width: 220px; }
+  .kcpAnim-core { left: -40px; top: -40px; width: 80px; height: 80px; }
+  .kcpAnim-name { font-size: 24px; }
+  .kcpAnim-amt  { font-size: 14px; letter-spacing: 2px; }
+}
+
+/* ---- 减少动态效果：不播动画，结果直接可见 ---- */
+@media (prefers-reduced-motion: reduce) {
+  .kcpAnim.is-on { animation: none; opacity: 1; }
+  .kcpAnim-sky      { animation: kcpSkyReduced 2.6s ease-in-out both; }
+  .kcpAnim-meteors,
+  .kcpAnim-core::before { display: none; }
+  .kcpMeteor   { display: none; }
+  .kcpRing     { display: none; }
+  .kcpRay      { display: none; }
+  .kcpAnim-core{ animation: kcpCoreReduced 2.6s ease-in-out both; }
+  .kcpAnim-label { animation: kcpLabelReduced 2.6s ease-in-out both; }
+  /* 少动效下核心光球不脉动，只做一次很轻的淡入 */
+  @keyframes kcpCoreReduced {
+    0%   { opacity: 0; scale: .9; }
+    14%  { opacity: 1; scale: 1; }
+    82%  { opacity: 1; scale: 1; }
+    100% { opacity: 0; scale: 1; }
+  }
+  @keyframes kcpLabelReduced {
+    0%   { opacity: 0; }
+    14%  { opacity: 1; }
+    82%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes kcpSkyReduced {
+    0%   { opacity: 0; }
+    10%  { opacity: 1; }
+    86%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+}

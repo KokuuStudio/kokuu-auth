@@ -1,0 +1,13 @@
+{
+  "name": "kokuu-coupon",
+  "version": "1.0.0",
+  "title": "KokuuSkin 兑换码与抽奖",
+  "description": "补上「加分入口」：管理员批量生成兑换码，用户输入后可直接获得积分，或获得抽奖机会；抽奖按权重抽出不同数量的积分，积分直接进 users.score。兑换码一次性（靠数据库唯一索引保证，不靠「先查一下」），抽奖扣分与 kokuu-exchange 共用同一个「保留底仓」设置，两者叠加也扣不穿余额。",
+  "author": "KokuuStudio",
+  "namespace": "KokuuStudio\\KokuuCoupon",
+  "require": {
+    "kokuu-credit": "^1.0.0",
+    "blessing-skin-server": "^6.0",
+    "php": ">=8.1"
+  }
+}
