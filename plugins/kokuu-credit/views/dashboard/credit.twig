@@ -1,0 +1,99 @@
+{#
+  仪表盘 · 积分容器
+
+  数据由 bootstrap.php 的 grid:admin.index 钩子用 View::share('kcDash', ...)
+  算好后挂进来，这里直接读。
+
+  ⚠️ 绝不要在twig 里调 `{{ kokuu_credit_dashboard_data(...) }}`：
+     Twig 沙箱不放行自定义 PHP 函数，会报
+     Unknown "kokuu_credit_dashboard_data" function。
+  ⚠️ 当前登录用户用 `auth_user()`，**不是** `auth()`（内核没注册后者）。
+#}
+{% set data = kcDash %}
+
+{# 左列：积分主卡 + 最近变动，上下两张 #}
+<div class="kcDash-col">
+  <section class="kcDash-card">
+    <header class="kcDash-head">
+      <span class="kcDash-eyebrow">
+        <i class="fas fa-coins"></i>
+        我的积分
+      </span>
+      <a class="kcDash-link" href="{{ url('plugin/kokuu-credit/ledger') }}">
+        流水
+        <i class="fas fa-chevron-right"></i>
+      </a>
+    </header>
+
+    <div class="kcDash-balance">
+      <span class="kcDash-balance-num">{{ data.score }}</span>
+      <span class="kcDash-balance-unit">积分</span>
+    </div>
+
+    <p class="kcDash-sub">皮肤站账户唯一账本，论坛消费直接扣除</p>
+
+    {# ---------- 今日 + 签到 ---------- #}
+    <div class="kcDash-metrics">
+      <div class="kcDash-metric">
+        <span class="kcDash-metric-num">+{{ data.todayEarned }}</span>
+        <span class="kcDash-metric-label">今日获得</span>
+      </div>
+      <div class="kcDash-metric">
+        <span class="kcDash-metric-num">{{ data.todayEvents }}</span>
+        <span class="kcDash-metric-label">今日笔数</span>
+      </div>
+    </div>
+
+    {# ---------- 签到 ----------
+       按钮由本插件实现（内核的 React SignButton 挂在原生 usage widget 上，
+       我们的 grid 接管后它不会跟过来）。JS 在 assets/sign.js，
+       点击 → POST /user/sign，成功后就地刷新状态。
+       `data-kc-sign` 上的初值只是首屏渲染用，真实判定以 JS 读到的
+       score-info 为准（避免页面缓存导致倒计时不准）。
+    #}
+    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}"
+         data-kc-sign="{{ data.sign.signed ? 'done' : 'todo' }}"
+         data-kc-sign-at="{{ data.sign.at ? data.sign.at.toIso8601String() : '' }}">
+      <span class="kcDash-sign-main">
+        <span class="kcDash-sign-icon">
+          <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+        </span>
+        <span class="kcDash-sign-text">{{ data.sign.text }}</span>
+      </span>
+      <button type="button" class="kcDash-sign-btn" {% if data.sign.signed %}disabled{% endif %}>
+        <i class="far fa-calendar-check"></i>
+        <span class="kcDash-sign-btn-text">{{ data.sign.signed ? '已签到' : '签到' }}</span>
+      </button>
+    </div>
+  </section>
+
+  {# ---------- 最近变动 ---------- #}
+  <section class="kcDash-card">
+    <header class="kcDash-head">
+      <span class="kcDash-eyebrow">
+        <i class="fas fa-history"></i>
+        最近变动
+      </span>
+    </header>
+
+    {% if not data.ledgerReady %}
+      <p class="kcDash-empty">积分流水尚未初始化</p>
+    {% elseif data.recent is empty %}
+      <p class="kcDash-empty">还没有积分记录，去论坛发帖或回复试试</p>
+    {% else %}
+      <ul class="kcDash-list">
+        {% for item in data.recent %}
+          <li class="kcDash-row">
+            <span class="kcDash-row-main">
+              <span class="kcDash-row-label">{{ item.source_label }}</span>
+              <span class="kcDash-row-time">{{ item.at }}</span>
+            </span>
+            <span class="kcDash-row-delta {{ item.delta > 0 ? 'is-plus' : (item.delta < 0 ? 'is-minus' : 'is-zero') }}">
+              {{ item.delta > 0 ? '+' : '' }}{{ item.delta }}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+</div>

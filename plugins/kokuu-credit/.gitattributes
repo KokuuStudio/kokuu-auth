@@ -1,0 +1,20 @@
+# 默认按文本处理，检出时统一为 LF。
+#
+# 为什么必须显式写：开发机是 Windows（Git 默认 core.autocrlf=true，
+# 检出时会转成 CRLF），而插件跑在 Linux 服务器上。
+# PHP 本身能容忍 CRLF，但：
+#   - Twig 模板里 CRLF 会让输出的 HTML 多出无意义的空白与 \r
+#   - 模板里 if/endif 的行尾空白在部分 Twig 版本会解析异常
+#   - diff 会出现「整文件都改了」的假变更，很难排查
+# 所以文本文件一律 LF，二进制文件不做转换。
+* text=auto eol=lf
+
+# 明确排除二进制
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

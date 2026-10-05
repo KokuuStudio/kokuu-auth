@@ -1,0 +1,13 @@
+{
+  "name": "kokuu-credit",
+  "version": "1.0.0",
+  "title": "KokuuSkin 论坛积分",
+  "description": "论坛赚积分的唯一账本。提供带 HMAC 签名的服务端加分接口，把 Flarum 论坛产生的加分事件写入 users.score 并留下 credit_ledger 流水。论坛侧只加分不扣分，扣分场景（建角色/衣柜/兑换）仍走内核原有逻辑。",
+  "author": "KokuuStudio",
+  "namespace": "KokuuStudio\\KokuuCredit",
+  "config": "config.blade.php",
+  "require": {
+    "blessing-skin-server": "^6.0",
+    "php": ">=8.1"
+  }
+}

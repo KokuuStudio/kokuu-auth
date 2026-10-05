@@ -1,0 +1,95 @@
+{#
+  用户中心 · 积分容器
+
+  与后台的 dashboard/credit.twig **结构一致但内容不同**——
+  普通用户看不到「管理员视角」的东西，也不需要那么长的列表。
+
+  数据由 bootstrap.php 的 grid:user.index 钩子用
+  View::share('kcDashUser', ...) 算好后挂进来。
+
+  ⚠️ share 键是 kcDashUser，**不是**后台那个 kcDash。
+     View::share 是全局的、不按页面隔离，共用一个键会互相覆盖。
+
+  ⚠️ 绝不要在 twig 里调 `{{ kokuu_credit_dashboard_data(...) }}`：
+     Twig 沙箱不放行自定义 PHP 函数，会报
+     Unknown "kokuu_credit_dashboard_data" function。
+  ⚠️ 当前登录用户用 `auth_user()`，**不是** `auth()`（内核没注册后者）。
+#}
+{% set data = kcDashUser %}
+
+<div class="kcDash-col">
+  <section class="kcDash-card">
+    <header class="kcDash-head">
+      <span class="kcDash-eyebrow">
+        <i class="fas fa-coins"></i>
+        我的积分
+      </span>
+      {# 普通用户不该被导向管理员专属的流水页（那边会 403） #}
+      {% if auth_user().admin %}
+        <a class="kcDash-link" href="{{ url('plugin/kokuu-credit/ledger') }}">
+          流水
+          <i class="fas fa-chevron-right"></i>
+        </a>
+      {% endif %}
+    </header>
+
+    <div class="kcDash-balance">
+      <span class="kcDash-balance-num">{{ data.score }}</span>
+      <span class="kcDash-balance-unit">积分</span>
+    </div>
+
+    <p class="kcDash-sub">在论坛发帖、回复即可获得积分</p>
+
+    <div class="kcDash-metrics">
+      <div class="kcDash-metric">
+        <span class="kcDash-metric-num">+{{ data.todayEarned }}</span>
+        <span class="kcDash-metric-label">今日获得</span>
+      </div>
+      <div class="kcDash-metric">
+        <span class="kcDash-metric-num">{{ data.todayEvents }}</span>
+        <span class="kcDash-metric-label">今日笔数</span>
+      </div>
+    </div>
+
+    {# ---------- 签到 ----------
+       与后台仪表盘同一套结构（见 dashboard/credit.twig 注释）。
+       普通用户在这里看到的按钮才是真正会被点的那个，
+       所以 user 侧必须是完整可用的，不能只做展示。
+    #}
+    <div class="kcDash-sign {{ data.sign.signed ? 'is-done' : 'is-todo' }}"
+         data-kc-sign="{{ data.sign.signed ? 'done' : 'todo' }}"
+         data-kc-sign-at="{{ data.sign.at ? data.sign.at.toIso8601String() : '' }}">
+      <span class="kcDash-sign-main">
+        <span class="kcDash-sign-icon">
+          <i class="fas {{ data.sign.signed ? 'fa-check' : 'fa-calendar-check' }}"></i>
+        </span>
+        <span class="kcDash-sign-text">{{ data.sign.text }}</span>
+      </span>
+      <button type="button" class="kcDash-sign-btn" {% if data.sign.signed %}disabled{% endif %}>
+        <i class="far fa-calendar-check"></i>
+        <span class="kcDash-sign-btn-text">{{ data.sign.signed ? '已签到' : '签到' }}</span>
+      </button>
+    </div>
+  </section>
+
+  {#
+    这里**刻意不放**的东西，用户都明确说过不要：
+
+    · 「+10 发起主题 / +2 回复帖子」加分规则
+      ——「用户的仪表盘积分页不需要那个发起主题的积分记录」。
+      加分规则属于**规则说明**，而积分卡是**状态展示**，
+      混在一起会让「有多少」这个核心信息被稀释。
+      真要说明规则，论坛侧或流水页更合适。
+
+    · 「前往论坛」CTA
+      ——「不需要那个前往论坛功能」。
+      社区 feed 卡片右上角本来就有一个「前往论坛」按钮（kokuu-forum 的
+      `kf-widget-btn-primary`），仪表盘再放一个是重复入口。
+      积分卡只回答一个问题：我有多少分、今天加了没。
+
+    · 「最近变动」逐笔列表
+      ——「我不需要那么多……最近变动，当然这个可以保留折叠到侧栏里」，
+      逐笔明细归侧栏那个「论坛积分流水」入口。
+      管理员想看逐笔记录，从右上角「流水」链接跳过去即可。
+  #}
+</div>

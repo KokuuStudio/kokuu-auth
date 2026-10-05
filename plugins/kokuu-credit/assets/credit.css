@@ -1,0 +1,637 @@
+/* KokuuCredit 论坛积分 —— 后台配置页 + 流水页样式 */
+
+/* ================================================================
+   第一部分：流水页（Apple 扁平化）
+
+   与后台配置页的「虚空深色」表格刻意保持两种视觉：
+   流水页是普通用户会去看、也可能在手机上看��页面，
+   配置页是管理员一次性操作的表单页。
+   变量全部取 dash.css 同一套（--a-* / --k-*），深色模式自动跟随。
+
+   ⚠️ 每个 var() 都带 fallback：kokuu-apple 的类名是 JS 运行时加的，
+      类还没加上时 :root 变量可能不存在，不能让整页无色。
+   ================================================================ */
+
+.kcPage {
+  padding-bottom: 40px;
+}
+
+/* ---- 页头 ---- */
+.kcPage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 24px 0 18px;
+}
+
+.kcPage-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcPage-title i {
+  font-size: 17px;
+  color: var(--k-rain, #0FA3A3);
+}
+
+.kcPage-sub {
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 46em;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcPage-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px;
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+  border-radius: 999px;
+  background: var(--a-surface, #fff);
+  color: var(--a-text, #1C1C1E);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity .15s ease, transform .1s ease;
+}
+
+.kcPage-btn:hover { opacity: .68; }
+.kcPage-btn:active { transform: scale(.98); }
+.kcPage-btn i { font-size: 11px; }
+
+/* ---- 概览数字 ---- */
+.kcPage-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.kcPage-stat {
+  flex: 1 1 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 18px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcPage-stat-num {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcPage-stat-label {
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+/* ---- 工具折叠区 ---- */
+.kcPage-tools {
+  margin-bottom: 16px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+  overflow: hidden;
+}
+
+.kcPage-tools-sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--a-text-2, #6E6E73);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+/* Safari/Chrome 的原生三角在 summary 上要手动去掉 */
+.kcPage-tools-sum::-webkit-details-marker { display: none; }
+
+.kcPage-tools-sum::after {
+  content: '\f078';
+  font-family: 'Font Awesome 5 Free', 'Font Awesome 6 Free', sans-serif;
+  font-weight: 900;
+  font-size: 10px;
+  margin-left: auto;
+  transition: transform .18s ease;
+}
+
+.kcPage-tools[open] .kcPage-tools-sum::after { transform: rotate(180deg); }
+.kcPage-tools-sum i { font-size: 12px; }
+
+.kcPage-tools-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 16px 14px;
+  border-top: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+  padding-top: 14px;
+}
+
+.kcPage-label {
+  font-size: 13px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcPage-input {
+  width: 150px;
+  padding: 7px 11px;
+  font-size: 13px;
+  color: var(--a-text, #1C1C1E);
+  background: var(--a-surface-2, #FBFBFD);
+  border: 1px solid var(--a-sep-strong, rgba(60, 60, 67, .20));
+  border-radius: 10px;
+}
+
+.kcPage-input:focus {
+  outline: none;
+  border-color: var(--k-rain, #0FA3A3);
+  box-shadow: 0 0 0 3px rgba(15, 163, 163, .16);
+}
+
+.kcPage-btn--go {
+  background: var(--k-rain, #0FA3A3);
+  border-color: transparent;
+  color: #fff;
+  padding: 7px 16px;
+}
+
+/* ---- 流水卡片（替代原来的 7 列表格） ---- */
+.kcRec {
+  background: var(--a-surface, #fff);
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+  border-radius: var(--a-radius-sm, 12px);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.kcRec-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+}
+
+.kcRec-ico {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  background: rgba(15, 163, 163, .12);
+  color: var(--k-rain, #0FA3A3);
+}
+
+.kcRec-ico i { font-size: 12px; }
+
+/* 管理员手动 / 历史补录这类非论坛来源，用中性色区分 */
+.kcRec--manual .kcRec-ico {
+  background: rgba(139, 127, 212, .14);
+  color: var(--k-lilac, #8B7FD4);
+}
+
+.kcRec-body { flex: 1 1 auto; min-width: 0; }
+
+.kcRec-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--a-text, #1C1C1E);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kcRec-time {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--a-text-3, #A1A1A6);
+}
+
+.kcRec-delta {
+  flex: 0 0 auto;
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+.kcRec-delta.is-plus { color: #248A3D; }
+.kcRec-delta.is-minus { color: #D70015; }
+.kcRec-delta.is-zero { color: var(--a-text-3, #A1A1A6); }
+
+/* ---- 每条记录自己的「技术详情」折叠 ---- */
+.kcRec-more {
+  border-top: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcRec-more > summary {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--a-text-3, #A1A1A6);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.kcRec-more > summary::-webkit-details-marker { display: none; }
+
+.kcRec-more > summary::before {
+  content: '\f078';
+  font-family: 'Font Awesome 5 Free', 'Font Awesome 6 Free', sans-serif;
+  font-weight: 900;
+  font-size: 9px;
+  margin-right: 7px;
+  display: inline-block;
+  transition: transform .18s ease;
+}
+
+.kcRec-more[open] > summary::before { transform: rotate(90deg); }
+
+.kcRec-more > summary:hover { color: var(--a-text-2, #6E6E73); }
+
+/*
+ * 内部用 dl 而不是 table —— 三列固定标签/值对齐更好控制，
+ * 而且移动端不需要横向滚动。
+ */
+.kcRec-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 2px 16px 14px;
+  font-size: 12px;
+}
+
+.kcRec-facts dt {
+  color: var(--a-text-3, #A1A1A6);
+  white-space: nowrap;
+}
+
+.kcRec-facts dd {
+  margin: 0;
+  color: var(--a-text-2, #6E6E73);
+  word-break: break-all;
+}
+
+/* 事件 ID 用等宽字体 + 浅底，方便肉眼比对两笔是否同一条 */
+.kcRec-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--a-surface-2, #FBFBFD);
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcRec-uid {
+  font-size: 11px;
+  color: var(--a-text-3, #A1A1A6);
+}
+
+/* ---- 移动端 ---- */
+@media (max-width: 600px) {
+  .kcPage-head {
+    margin-top: 18px;
+  }
+
+  .kcPage-title { font-size: 19px; }
+  .kcPage-sub { font-size: 12px; }
+
+  /* 概览三格在窄屏排成一行会挤成三条细柱，改为两列 */
+  .kcPage-stat { flex: 1 1 calc(50% - 6px); padding: 12px 14px; }
+  .kcPage-stat-num { font-size: 22px; }
+
+  /* 刷新按钮独占一行靠右，不跟标题挤 */
+  .kcPage-btn { padding: 7px 13px; font-size: 12px; }
+
+  .kcRec-main { padding: 12px 14px; gap: 10px; }
+  .kcRec-label { font-size: 13px; }
+  .kcRec-delta { font-size: 16px; }
+  .kcRec-facts { padding-left: 14px; padding-right: 14px; }
+}
+
+/* ---- 深色模式 ----
+ * 变量本身已随 :root 切换，这里只需处理两个写死白色的点。 */
+body.dark-mode .kcPage-btn--go { color: #fff; }
+
+body.dark-mode .kcPage-input {
+  background: rgba(255, 255, 255, .06);
+}
+
+body.dark-mode .kcRec-delta.is-plus { color: #5DCAA5; }
+body.dark-mode .kcRec-delta.is-minus { color: #F09595; }
+
+.kcPage-empty {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--a-text-3, #A1A1A6);
+  background: var(--a-surface, #fff);
+  border: 1px dashed var(--a-sep-strong, rgba(60, 60, 67, .20));
+  border-radius: var(--a-radius-sm, 12px);
+}
+
+/* ================================================================
+   第二部分：后台配置页（虚空深色，保留原有表格体系）
+
+   ⚠️ 流水页重写后**没有动**这一块 —— 后台配置页的 SSO 状态表、
+      绑定记录表仍在用 .kc-table / .kc-tag / .kc-event-id。
+   ================================================================ */
+
+.kc-stats {
+  display: flex;
+  gap: 12px;
+  margin: 16px 0 20px;
+  flex-wrap: wrap;
+}
+
+.kc-stat {
+  flex: 1 1 120px;
+  background: #26215C;
+  border: 0.5px solid #AFA9EC;
+  border-radius: 12px;
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.kc-stat-num {
+  font-size: 24px;
+  font-weight: 500;
+  color: #CECBF6;
+  line-height: 1.2;
+}
+
+.kc-stat-label {
+  font-size: 12px;
+  color: #AFA9EC;
+  margin-top: 4px;
+}
+
+/* ---- 流水表 ---- */
+.kc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.kc-toolbar label {
+  font-size: 13px;
+  color: #AFA9EC;
+}
+
+.kc-toolbar input {
+  width: 140px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 0.5px solid #534AB7;
+  background: #1a1638;
+  color: #EEEDFE;
+  font-size: 13px;
+}
+
+.kc-toolbar input:focus {
+  outline: none;
+  border-color: #7F77DD;
+}
+
+.kc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.kc-table th {
+  text-align: left;
+  font-weight: 500;
+  color: #AFA9EC;
+  padding: 8px 10px;
+  border-bottom: 0.5px solid #534AB7;
+  white-space: nowrap;
+}
+
+.kc-table td {
+  padding: 8px 10px;
+  border-bottom: 0.5px solid #372F7A;
+  color: #EEEDFE;
+  vertical-align: top;
+}
+
+.kc-table tr:hover td {
+  background: rgba(127, 119, 221, 0.12);
+}
+
+.kc-delta-plus { color: #5DCAA5; font-weight: 500; }
+.kc-delta-zero { color: #888780; }
+.kc-delta-minus { color: #F09595; font-weight: 500; }
+
+.kc-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #26215C;
+  color: #CECBF6;
+  border: 0.5px solid #534AB7;
+  white-space: nowrap;
+}
+
+.kc-empty {
+  padding: 24px;
+  text-align: center;
+  color: #888780;
+  font-size: 13px;
+}
+
+/* event_id 很长，允许换行并用等宽字体，便于排查幂等问题 */
+.kc-event-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: #AFA9EC;
+  word-break: break-all;
+  max-width: 220px;
+}
+
+.kc-note {
+  color: #AFA9EC;
+  font-size: 12px;
+  max-width: 260px;
+  word-break: break-word;
+}
+
+/* ============================================================
+   管理员调分面板
+   ============================================================
+   ⚠️ 这里**不使用 transform 做 hover 位移** —— 会创建层叠上下文，
+      面板里的下拉/结果列表 z-index 出不去。统一用边框与底色表达状态。
+   ============================================================ */
+
+.kcAdj .kcPage-tools-body {
+  display: block;
+  padding: 4px 16px 16px;
+}
+
+.kcAdj .help-text {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.kcAdj-row .kcPage-label {
+  min-width: 56px;
+  margin: 0;
+}
+
+.kcAdj-row .kcPage-input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* ---- 搜索结果 ---- */
+.kcAdj-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.kcAdj-hit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-surface, #fff);
+  color: var(--a-text, #1C1C1E);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.kcAdj-hit:hover {
+  border-color: var(--a-rain, #5E5CE6);
+  background: var(--a-surface-2, #F5F5F7);
+}
+
+.kcAdj-hit-name { font-weight: 600; }
+.kcAdj-hit-mail { color: var(--a-text-2, #6E6E73); font-size: 12px; }
+.kcAdj-hit-score {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--a-rain, #5E5CE6);
+}
+
+/* ---- 已选中的用户 ---- */
+.kcAdj-picked {
+  padding: 11px 13px;
+  margin-bottom: 12px;
+  border-radius: var(--a-radius-sm, 12px);
+  background: var(--a-surface-2, #F5F5F7);
+  border: 1px solid var(--a-sep, rgba(60, 60, 67, .13));
+}
+
+.kcAdj-picked-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--a-text, #1C1C1E);
+}
+
+.kcAdj-picked-mail {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-picked-score {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-picked-score b {
+  font-size: 15px;
+  color: var(--a-rain, #5E5CE6);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 表单 ---- */
+.kcAdj-modes {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.kcAdj-modes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--a-text, #1C1C1E);
+  cursor: pointer;
+}
+
+.kcAdj-preview {
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kcAdj-preview.is-bad { color: #D0342C; font-weight: 600; }
+
+.kcAdj-msg {
+  font-size: 12px;
+  color: var(--a-text-2, #6E6E73);
+}
+
+.kcAdj-msg.is-ok { color: #1D9E4B; font-weight: 600; }
+.kcAdj-msg.is-err { color: #D0342C; font-weight: 600; }
+
+@media (max-width: 480px) {
+  .kcAdj-row .kcPage-label { min-width: 100%; }
+  .kcAdj-hit-score { margin-left: 0; }
+}

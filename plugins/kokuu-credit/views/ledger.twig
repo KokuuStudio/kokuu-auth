@@ -1,0 +1,153 @@
+{#
+  论坛积分流水（重写版）
+
+  用户原话：「我对并不需要那么复杂的记录，或者把这个积分流水的侧边栏折叠起来」
+
+  → 两个诉求合并处理：
+    1. **去掉技术字段**。变动后余额 / 事件 ID / 备注这三列是给
+       排查幂等问题用的，管理员一年也用不到两次，普通用户完全无意义。
+       默认视图只留「时间 / 来源 / 变动」。
+    2. **技术信息折叠**。剩下的余额、事件 ID、备注、所属用户
+       放进每条记录自己的 `<details>` 里，默认收起——
+       这就是「折叠起来」的落点，而不是折叠整个侧边栏
+       （侧边栏是 AdminLTE 骨架，折叠它会影响所有页面）。
+
+  另外把表格换成了卡片流：7 列表格在 390px 移动端必须横向滚动，
+  而积分变动本身就是「一条一条的事」，纵向卡片天然可读。
+
+  数据由 bootstrap.php 的路由用
+  View::share('ledgerStats'|'sourceLabels', ...) 挂进来；
+  列表本身走 /plugin/kokuu-credit/api/ledger 异步拉。
+
+  ⚠️ 顶部「用户积分操作」面板是管理员调分入口（用户需求：
+     「给管理员加一个可以操作所有用户积分的功能」）。
+     它**刻意放在同一个页面**而不是单独一页 —— 调完分立刻能在
+     下方流水里看到那条 manual 记录，不用来回跳。
+     面板默认收起：它是低频操作，而流水是高频浏览。
+#}
+{% extends 'user.base.twig' %}
+
+{% block content %}
+<div class="container kcPage"
+     data-users-url="{{ url('/plugin/kokuu-credit/api/users') }}"
+     data-adjust-url="{{ url('/plugin/kokuu-credit/api/adjust') }}">
+
+  {# ---- 管理员调分面板（默认收起） ---- #}
+  <details class="kcPage-tools kcAdj" id="kc-adj">
+    <summary class="kcPage-tools-sum">
+      <i class="fas fa-sliders-h"></i>
+      调整用户积分
+    </summary>
+    <div class="kcPage-tools-body">
+      <p class="help-text">
+        余额改动<strong>一定</strong>会写进下方流水（来源「管理员手动」），
+        并记录操作人。扣分<strong>不受底仓限制</strong>（底仓只保护用户自己消费），
+        但不允许扣成负数。
+      </p>
+
+      {# ---- 1. 选用户 ---- #}
+      <div class="kcAdj-row">
+        <label class="kcPage-label" for="kc-adj-q">搜索用户</label>
+        <input class="kcPage-input" type="text" id="kc-adj-q"
+               placeholder="UID / 昵称 / 邮箱" autocomplete="off">
+        <button class="kcPage-btn kcPage-btn--go" id="kc-adj-search" type="button">查找</button>
+      </div>
+      <div id="kc-adj-results" class="kcAdj-results" hidden></div>
+
+      {# ---- 2. 选中的人 ---- #}
+      <div class="kcAdj-picked" id="kc-adj-picked" hidden>
+        <div class="kcAdj-picked-name">
+          <span id="kc-adj-picked-nickname"></span>
+          <span class="kcRec-uid" id="kc-adj-picked-uid"></span>
+        </div>
+        <div class="kcAdj-picked-mail" id="kc-adj-picked-email"></div>
+        <div class="kcAdj-picked-score">
+          当前余额 <b id="kc-adj-picked-score">0</b>
+        </div>
+      </div>
+
+      {# ---- 3. 操作 ---- #}
+      <div class="kcAdj-form" id="kc-adj-form" hidden>
+        <div class="kcAdj-row">
+          <label class="kcPage-label">操作</label>
+          <div class="kcAdj-modes" id="kc-adj-modes">
+            <label><input type="radio" name="kc-adj-mode" value="add" checked> 增加</label>
+            <label><input type="radio" name="kc-adj-mode" value="sub"> 扣减</label>
+            <label><input type="radio" name="kc-adj-mode" value="set"> 设为</label>
+          </div>
+        </div>
+        <div class="kcAdj-row">
+          <label class="kcPage-label" for="kc-adj-amount" id="kc-adj-amount-label">数额</label>
+          <input class="kcPage-input" type="number" id="kc-adj-amount" min="0" step="1" value="0">
+          <span class="kcAdj-preview" id="kc-adj-preview"></span>
+        </div>
+        <div class="kcAdj-row">
+          <label class="kcPage-label" for="kc-adj-note">原因</label>
+          <input class="kcPage-input" type="text" id="kc-adj-note"
+                 maxlength="100" placeholder="写清楚原因，会记进流水">
+        </div>
+        <div class="kcAdj-row">
+          <button class="kcPage-btn kcPage-btn--go" id="kc-adj-submit" type="button">确认调整</button>
+          <span class="kcAdj-msg" id="kc-adj-msg"></span>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  {# ---- 页头 ---- #}
+  <header class="kcPage-head">
+    <div>
+      <h2 class="kcPage-title">
+        <i class="fas fa-coins"></i>
+        论坛积分流水
+      </h2>
+      <p class="kcPage-sub">
+        论坛产生的加分记录。全站只有一个余额字段，
+        在论坛消费积分请回皮肤站。
+      </p>
+    </div>
+    <button id="kc-refresh" class="kcPage-btn" type="button">
+      <i class="fas fa-rotate"></i>
+      刷新
+    </button>
+  </header>
+
+  {# ---- 三个概览数字 ---- #}
+  <div class="kcPage-stats">
+    <div class="kcPage-stat">
+      <span class="kcPage-stat-num" id="kc-stat-total">{{ stats.total }}</span>
+      <span class="kcPage-stat-label">累计笔数</span>
+    </div>
+    <div class="kcPage-stat">
+      <span class="kcPage-stat-num" id="kc-stat-today">{{ stats.today }}</span>
+      <span class="kcPage-stat-label">今日发放</span>
+    </div>
+    <div class="kcPage-stat">
+      <span class="kcPage-stat-num" id="kc-stat-events">{{ stats.events }}</span>
+      <span class="kcPage-stat-label">今日事件</span>
+    </div>
+  </div>
+
+  {#
+    UID 筛选也收进折叠区。
+    它是管理员工具（排查某个用户的加分），不是浏览流水时的常用操作，
+    默认展开反而抢注意力。
+  #}
+  <details class="kcPage-tools">
+    <summary class="kcPage-tools-sum">
+      <i class="fas fa-sliders"></i>
+      按用户筛选
+    </summary>
+    <div class="kcPage-tools-body">
+      <label class="kcPage-label" for="kc-uid">皮肤站 UID</label>
+      <input class="kcPage-input" type="number" id="kc-uid" min="1" placeholder="留空看全部用户">
+      <button class="kcPage-btn kcPage-btn--go" id="kc-uid-go" type="button">筛选</button>
+    </div>
+  </details>
+
+  {# ---- 列表 ---- #}
+  <div id="kc-list" data-url="{{ url('/plugin/kokuu-credit/api/ledger') }}">
+    <div class="kcPage-empty">加载中…</div>
+  </div>
+</div>
+{% endblock %}
